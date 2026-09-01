@@ -1,0 +1,178 @@
+{
+  "show_volume": false,
+  "main_indicators": [
+    "HI_LOW_Bands"
+  ],
+  "sub_indicators": [],
+  "indicator_params": {
+    "SMA": {
+      "period1": 3,
+      "period2": 25,
+      "period3": 86
+    },
+    "EMA": {
+      "period1": 9,
+      "period2": 13,
+      "period3": 26
+    },
+    "WMA": {
+      "period1": 5,
+      "period2": 20
+    },
+    "Bollinger_Bands": {
+      "period": 20,
+      "nbdev": 2.0
+    },
+    "Envelope": {
+      "period": 20,
+      "deviation1": 1.0,
+      "deviation2": 2.0
+    },
+    "Ichimoku": {
+      "tenkan": 9,
+      "kijun": 26,
+      "senkou_b": 52
+    },
+    "HI_LOW_Bands": {
+      "period": 5
+    },
+    "Keltner_Channel": {
+      "ema_period": 20,
+      "atr_period": 10,
+      "multiplier": 1.5
+    },
+    "Meander": {
+      "period": 13,
+      "multiplier": 1.0
+    },
+    "MACD": {
+      "fast_period": 9,
+      "slow_period": 13,
+      "signal_period": 3
+    },
+    "RSI": {
+      "period": 9,
+      "upper": 70,
+      "lower": 30
+    },
+    "Stochastics": {
+      "k_period": 5,
+      "d_period": 3,
+      "sd_period": 3
+    },
+    "Stochastics_RSI": {
+      "rsi_period": 9,
+      "k_period": 3,
+      "d_period": 3,
+      "sd_period": 3
+    },
+    "ATR": {
+      "period": 10
+    },
+    "DMI": {
+      "period": 14
+    },
+    "RCI": {
+      "period1": 9,
+      "period2": 26
+    },
+    "ROC": {
+      "period": 7
+    },
+    "CMO": {
+      "period": 14
+    },
+    "Psychological_Line": {
+      "period": 12
+    },
+    "Balance_of_Power": {
+      "period": 14
+    },
+    "Sinohara_Ratio": {
+      "period": 26
+    },
+    "Volatility_Ratio": {
+      "period": 9
+    },
+    "R_Oscillator": {
+      "period": 5
+    },
+    "Estrangement_SMA": {
+      "period": 25
+    },
+    "Estrangement_EMA": {
+      "period": 25
+    },
+    "Estrangement_WMA": {
+      "period": 25
+    },
+    "Binary_Wave": {
+      "macd_fast": 9,
+      "macd_slow": 13,
+      "macd_signal": 3,
+      "rsi_period": 9,
+      "sma_period": 5
+    },
+    "Ultimate_Oscillator": {
+      "period1": 7,
+      "period2": 14,
+      "period3": 28
+    }
+  },
+  "backtest_settings": {
+    "strategy_key": "grid_nanpin",
+    "n_period": 5,
+    "entry_delta": 300.0,
+    "grid_step": 300.0,
+    "tp_delta": 300.0,
+    "sl_amount": 1000000.0,
+    "fee": 15.0,
+    "capital": 3000000.0,
+    "margin_per_lot": 45000.0,
+    "lot_table": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7",
+    "emergency_breakeven_exit": false
+  },
+  "lot_table_templates": {
+    "標準16段 (73枚)": "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10",
+    "堅実16段 (46枚)": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7",
+    "攻め8段 (36枚)": "1, 2, 3, 4, 5, 6, 7, 8"
+  },
+  "strategy_presets": {
+    "標準設定 (N=20, 利確200円, 73枚)": {
+      "n_period": 20,
+      "entry_delta": 200.0,
+      "grid_step": 250.0,
+      "tp_delta": 200.0,
+      "sl_amount": 500000.0,
+      "fee": 15.0,
+      "capital": 3000000.0,
+      "margin_per_lot": 25000.0,
+      "lot_table": "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10",
+      "emergency_breakeven_exit": false
+    },
+    "安全重視・同値撤退モード (N=20, 利確200円, 73枚)": {
+      "n_period": 20,
+      "entry_delta": 200.0,
+      "grid_step": 250.0,
+      "tp_delta": 200.0,
+      "sl_amount": 500000.0,
+      "fee": 15.0,
+      "capital": 3000000.0,
+      "margin_per_lot": 25000.0,
+      "lot_table": "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10",
+      "emergency_breakeven_exit": true
+    },
+    "60分 ±300円": {
+      "n_period": 5,
+      "entry_delta": 300.0,
+      "grid_step": 300.0,
+      "tp_delta": 300.0,
+      "sl_amount": 1000000.0,
+      "fee": 15.0,
+      "capital": 3000000.0,
+      "margin_per_lot": 45000.0,
+      "lot_table": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7",
+      "emergency_breakeven_exit": false
+    }
+  }
+}
