@@ -34,7 +34,7 @@
       "senkou_b": 52
     },
     "HI_LOW_Bands": {
-      "period": 5
+      "period": 20
     },
     "Keltner_Channel": {
       "ema_period": 20,
@@ -121,12 +121,13 @@
   },
   "backtest_settings": {
     "strategy_key": "grid_nanpin",
-    "n_period": 5,
-    "entry_delta": 300.0,
+    "entry_mode": "TREND",
+    "n_period": 8,
+    "entry_delta": 270.0,
     "grid_step": 300.0,
     "tp_delta": 300.0,
     "sl_amount": 1000000.0,
-    "fee": 15.0,
+    "fee": 11.0,
     "capital": 3000000.0,
     "margin_per_lot": 45000.0,
     "lot_table": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7",
@@ -135,7 +136,8 @@
   "lot_table_templates": {
     "標準16段 (73枚)": "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10",
     "堅実16段 (46枚)": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7",
-    "攻め8段 (36枚)": "1, 2, 3, 4, 5, 6, 7, 8"
+    "攻め8段 (36枚)": "1, 2, 3, 4, 5, 6, 7, 8",
+    "111222": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7"
   },
   "strategy_presets": {
     "標準設定 (N=20, 利確200円, 73枚)": {
@@ -171,7 +173,7 @@
       "fee": 15.0,
       "capital": 3000000.0,
       "margin_per_lot": 45000.0,
-      "lot_table": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7",
+      "lot_table": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7",
       "emergency_breakeven_exit": false
     }
   }

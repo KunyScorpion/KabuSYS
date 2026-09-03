@@ -14,7 +14,7 @@ class BaseStrategyConfig:
     timeframe: str = "30min"         # デフォルト対象足種
     multiplier: float = 10.0         # 乗数 (日経225マイクロ: 10倍)
     tick_size: float = 5.0           # 呼値 (5円刻み)
-    fee_per_lot: float = 15.0        # 片道手数料 (15円/枚)
+    fee_per_lot: float = 11.0        # 片道手数料 (11円/枚: 主要ネット証券標準)
     slippage: float = 0.0            # スリッページ (pt)
     initial_capital: float = 1000000.0 # 初期資本金 (1,000,000円)
     margin_per_lot: float = 25000.0  # 必要証拠金 (25,000円/枚)

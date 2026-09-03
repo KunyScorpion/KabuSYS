@@ -20,9 +20,10 @@ from src.backend.data_parser import DataParser
 from src.backend.grid_nanpin_strategy import GridNanpinConfig, GridNanpinBacktester
 
 def main():
-    parser = argparse.ArgumentParser(description="日経225マイクロ先物 逆張りグリッドナンピン戦略 バックテスト実行")
+    parser = argparse.ArgumentParser(description="日経225マイクロ先物 逆張り/順張りIFグリッドナンピン戦略 バックテスト実行")
     parser.add_argument("--data", type=str, default="data/market/N225microf_2026.xlsx", help="データファイルのパス")
     parser.add_argument("--sheet", type=str, default="15min", help="Excelのシート名 (時間足: 1min, 5min, 15min, 60min 等)")
+    parser.add_argument("--entry_mode", type=str, default="contrarian", choices=["contrarian", "trend"], help="エントリー方向 (contrarian: 逆張り, trend: 順張りIFモード)")
     parser.add_argument("--n_period", type=int, default=20, help="基準線(High/Low)の期間N (最大500)")
     parser.add_argument("--entry_delta", type=float, default=200.0, help="エントリー突破幅 (円)")
     parser.add_argument("--grid_step", type=float, default=250.0, help="ナンピン逆行幅 (円)")
@@ -32,6 +33,7 @@ def main():
     parser.add_argument("--lots", type=str, default="1,1,2,2,3,3,3,4,4,5,5,6,7,8,9,10", help="ナンピンロットテーブル (カンマ区切り)")
     parser.add_argument("--capital", type=float, default=3000000.0, help="初期資金 (円)")
     parser.add_argument("--margin", type=float, default=25000.0, help="必要証拠金 (円/枚)")
+    parser.add_argument("--fee", type=float, default=11.0, help="片道手数料 (円/枚, デフォルト: 11.0円)")
     parser.add_argument("--output_dir", type=str, default="output", help="レポート・画像保存先ディレクトリ")
     parser.add_argument("--max_bars_plot", type=int, default=2000, help="チャート描画に含める最大バー数")
     
@@ -58,8 +60,11 @@ def main():
     except:
         lot_table = [1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10]
 
+    mode_val = "TREND" if args.entry_mode.lower() == "trend" else "CONTRARIAN"
+
     # 戦略設定の初期化
     config = GridNanpinConfig(
+        entry_mode=mode_val,
         n_period=args.n_period,
         entry_delta=args.entry_delta,
         grid_step=args.grid_step,
@@ -69,7 +74,7 @@ def main():
         emergency_breakeven_exit=args.emergency_exit,
         multiplier=10.0,     # 日経225マイクロ
         tick_size=5.0,       # 呼値5円
-        fee_per_lot=15.0,    # 片道15円/枚
+        fee_per_lot=args.fee, # 片道手数料
         initial_capital=args.capital,
         margin_per_lot=args.margin
     )

@@ -10,15 +10,18 @@ import matplotlib.ticker as ticker
 @dataclass
 class GridNanpinConfig:
     """
-    高値安値ライン突破・逆張りグリッドナンピン戦略の設定クラス
+    高値安値ライン突破・逆張り/順張りグリッドナンピン戦略の設定クラス
     """
     name: str = "高値安値ライン突破・逆張りグリッドナンピン戦略"
+    
+    # エントリー方向設定 ("CONTRARIAN": 逆張り, "TREND": 順張り IFモード)
+    entry_mode: str = "CONTRARIAN"
     
     # 基準線設定
     n_period: int = 20           # 直近N期間のHigh/Lowライン
     
     # エントリー設定
-    entry_delta: float = 200.0   # 基準線突破幅 (High+200円でショート, Low-200円でロング)
+    entry_delta: float = 200.0   # 基準線突破幅 (逆張り: High+200円でショート, Low-200円でロング / 順張りIF: High+200円でロング, Low-200円でショート)
     
     # ナンピン設定 (ロング・ショート共通のロットテーブル)
     grid_step: float = 250.0     # 逆行幅 (250円ごとにナンピン)
@@ -38,12 +41,20 @@ class GridNanpinConfig:
     # 取引対象・コスト設定 (日経225マイクロ先物)
     multiplier: float = 10.0     # 乗数 (10倍: 1pt = 10円)
     tick_size: float = 5.0       # 呼値 (5円刻み)
-    fee_per_lot: float = 15.0    # 片道手数料 (15円/枚)
+    fee_per_lot: float = 11.0    # 片道手数料 (11円/枚: 主要ネット証券標準)
     slippage: float = 0.0        # スリッページ (pt)
     initial_capital: float = 3000000.0 # 初期資本金 (3,000,000円)
     margin_per_lot: float = 25000.0    # 必要証拠金 (25,000円/枚)
 
     def __post_init__(self):
+        # entry_mode の正規化と戦略名更新
+        if str(self.entry_mode).upper() in ["TREND", "FOLLOW", "順張り"]:
+            self.entry_mode = "TREND"
+            if self.name == "高値安値ライン突破・逆張りグリッドナンピン戦略":
+                self.name = "高値安値ライン突破・順張りIFグリッドナンピン戦略"
+        else:
+            self.entry_mode = "CONTRARIAN"
+            
         # short_lot_table / long_lot_table が指定されている場合は lot_table に同期
         if self.short_lot_table is not None and self.lot_table == [1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10]:
             self.lot_table = self.short_lot_table
@@ -52,6 +63,7 @@ class GridNanpinConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "entry_mode": self.entry_mode,
             "n_period": self.n_period,
             "entry_delta": self.entry_delta,
             "grid_step": self.grid_step,
@@ -237,8 +249,10 @@ class BacktestResult:
         """サマリーレポートをコンソール出力"""
         m = self.metrics
         c = self.config
+        mode_label = "【IFモード】順張り (Highブレイク買い / Lowブレイク売り)" if c.entry_mode == "TREND" else "【通常】逆張り (Highブレイク売り / Lowブレイク買い)"
         print("\n" + "=" * 65)
         print(f"  {c.name} - バックテスト結果サマリー")
+        print(f"  売買モード: {mode_label}")
         print("=" * 65)
         print(f"【基本設定】")
         print(f"  基準線期間(N): {c.n_period}本 | エントリー幅: ±{c.entry_delta}円 | グリッド幅: {c.grid_step}円")
@@ -295,12 +309,14 @@ class BacktestResult:
             # ショート初期エントリー
             short_entries = sig_sub[sig_sub['event'] == 'SHORT_ENTRY']
             if not short_entries.empty:
-                ax_price.scatter(short_entries['time'], short_entries['price'], marker='v', color='#ff1744', s=90, label='ショート開始 (High+200)', zorder=5)
+                s_lbl = f'ショート開始 (Low-{self.config.entry_delta:.0f} 順張り)' if self.config.entry_mode == "TREND" else f'ショート開始 (High+{self.config.entry_delta:.0f} 逆張り)'
+                ax_price.scatter(short_entries['time'], short_entries['price'], marker='v', color='#ff1744', s=90, label=s_lbl, zorder=5)
                 
             # ロング初期エントリー
             long_entries = sig_sub[sig_sub['event'] == 'LONG_ENTRY']
             if not long_entries.empty:
-                ax_price.scatter(long_entries['time'], long_entries['price'], marker='^', color='#00e676', s=90, label='ロング開始 (Low-200)', zorder=5)
+                l_lbl = f'ロング開始 (High+{self.config.entry_delta:.0f} 順張り)' if self.config.entry_mode == "TREND" else f'ロング開始 (Low-{self.config.entry_delta:.0f} 逆張り)'
+                ax_price.scatter(long_entries['time'], long_entries['price'], marker='^', color='#00e676', s=90, label=l_lbl, zorder=5)
                 
             # ナンピン追加 (白丸)
             nanpins = sig_sub[sig_sub['event'] == 'NANPIN']
@@ -714,111 +730,192 @@ class GridNanpinBacktester:
             # B. ポジション非保有の場合: 新規エントリー判定
             # ----------------------------------------------------
             if pos is None:
-                short_trigger_price = h_line + self.config.entry_delta
-                long_trigger_price = l_line - self.config.entry_delta
+                is_trend = (self.config.entry_mode == "TREND")
+                high_trigger_price = h_line + self.config.entry_delta
+                low_trigger_price = l_line - self.config.entry_delta
                 
-                can_short = (h >= short_trigger_price)
-                can_long = (l <= long_trigger_price)
+                high_breached = (h >= high_trigger_price)
+                low_breached = (l <= low_trigger_price)
                 
-                if can_short and can_long:
-                    if abs(o - short_trigger_price) <= abs(o - long_trigger_price):
-                        can_long = False
+                if high_breached and low_breached:
+                    if abs(o - high_trigger_price) <= abs(o - low_trigger_price):
+                        low_breached = False
                     else:
-                        can_short = False
+                        high_breached = False
                         
-                if can_short:
-                    entry_p = max(o, short_trigger_price) + self.config.slippage
+                if high_breached:
+                    # Highライン突破: 逆張りならSHORT、順張りIFならLONG
+                    entry_side = 'LONG' if is_trend else 'SHORT'
+                    entry_p = max(o, high_trigger_price) + self.config.slippage
                     entry_p = round(entry_p / self.config.tick_size) * self.config.tick_size
                     init_lots = self.config.lot_table[0]
                     init_fee = init_lots * self.config.fee_per_lot
                     
                     pos = Position(
-                        pos_type='SHORT',
+                        pos_type=entry_side,
                         entries=[PositionEntry(level=0, time=t, price=entry_p, lots=init_lots, fee=init_fee)],
                         initial_baseline=h_line
                     )
                     
+                    mode_tag = " [IF順張り]" if is_trend else ""
                     signal_events.append({
                         'time': t,
                         'price': entry_p,
-                        'event': 'SHORT_ENTRY',
-                        'detail': f'新規SHORTエントリー ({init_lots}枚 @ ¥{entry_p:,.0f})'
+                        'event': f'{entry_side}_ENTRY',
+                        'detail': f'新規{entry_side}エントリー{mode_tag} (High突破 {init_lots}枚 @ ¥{entry_p:,.0f})'
                     })
 
-                    # ★【重要修正】エントリーした同一バー内でのナンピン即時執行
-                    lot_table = self.config.lot_table
-                    next_level = 1
-                    while next_level < len(lot_table):
-                        target_nanpin_price = pos.first_entry_price + next_level * self.config.grid_step
-                        if h >= target_nanpin_price:
-                            nanpin_p = round(target_nanpin_price / self.config.tick_size) * self.config.tick_size
-                            add_lots = lot_table[next_level]
-                            add_fee = add_lots * self.config.fee_per_lot
-                            
-                            pos.entries.append(PositionEntry(
-                                level=next_level,
-                                time=t,
-                                price=nanpin_p,
-                                lots=add_lots,
-                                fee=add_fee
-                            ))
-                            
-                            signal_events.append({
-                                'time': t,
-                                'price': nanpin_p,
-                                'event': 'NANPIN',
-                                'detail': f'SHORTナンピン#{next_level} ({add_lots}枚 @ ¥{nanpin_p:,.0f}, 平均: ¥{pos.avg_price:,.0f})'
-                            })
-                            next_level += 1
-                        else:
-                            break
+                    # ★【重要修正】エントリーした同一バー内でのナンピン執行
+                    # 逆張り（not is_trend）の場合:
+                    #   High突破（SHORT）に対してさらなる高値hの上昇、Low下抜け（LONG）に対してさらなる安値lの下落という
+                    #   同一ベクトル方向のオーバーシュートであるため時系列的に整合し、即時ナンピンを執行する。
+                    # 順張り（is_trend）の場合:
+                    #   High突破（LONG）時に反対側の極値l、Low下抜け（SHORT）時に反対側の極値hを参照すると、
+                    #   エントリー前の過去のヒゲで誤って即時ナンピンしてしまう時系列矛盾（先食い）が生じるため、
+                    #   順張りモードでは同一バー内ナンピンを行わず次バー以降に正しく判定する。
+                    if not is_trend and pos.pos_type == 'SHORT':
+                        lot_table = self.config.lot_table
+                        next_level = 1
+                        while next_level < len(lot_table):
+                            target_nanpin_price = pos.first_entry_price + next_level * self.config.grid_step
+                            if h >= target_nanpin_price:
+                                nanpin_p = round(target_nanpin_price / self.config.tick_size) * self.config.tick_size
+                                add_lots = lot_table[next_level]
+                                add_fee = add_lots * self.config.fee_per_lot
+                                
+                                pos.entries.append(PositionEntry(
+                                    level=next_level,
+                                    time=t,
+                                    price=nanpin_p,
+                                    lots=add_lots,
+                                    fee=add_fee
+                                ))
+                                
+                                signal_events.append({
+                                    'time': t,
+                                    'price': nanpin_p,
+                                    'event': 'NANPIN',
+                                    'detail': f'SHORTナンピン#{next_level} ({add_lots}枚 @ ¥{nanpin_p:,.0f}, 平均: ¥{pos.avg_price:,.0f})'
+                                })
+                                next_level += 1
+                            else:
+                                break
                     
-                elif can_long:
-                    entry_p = min(o, long_trigger_price) - self.config.slippage
+                elif low_breached:
+                    # Lowライン突破: 逆張りならLONG、順張りIFならSHORT
+                    entry_side = 'SHORT' if is_trend else 'LONG'
+                    entry_p = min(o, low_trigger_price) - self.config.slippage
                     entry_p = round(entry_p / self.config.tick_size) * self.config.tick_size
                     init_lots = self.config.lot_table[0]
                     init_fee = init_lots * self.config.fee_per_lot
                     
                     pos = Position(
-                        pos_type='LONG',
+                        pos_type=entry_side,
                         entries=[PositionEntry(level=0, time=t, price=entry_p, lots=init_lots, fee=init_fee)],
                         initial_baseline=l_line
                     )
                     
+                    mode_tag = " [IF順張り]" if is_trend else ""
                     signal_events.append({
                         'time': t,
                         'price': entry_p,
-                        'event': 'LONG_ENTRY',
-                        'detail': f'新規LONGエントリー ({init_lots}枚 @ ¥{entry_p:,.0f})'
+                        'event': f'{entry_side}_ENTRY',
+                        'detail': f'新規{entry_side}エントリー{mode_tag} (Low突破 {init_lots}枚 @ ¥{entry_p:,.0f})'
                     })
 
-                    # ★【重要修正】エントリーした同一バー内でのナンピン即時執行
-                    lot_table = self.config.lot_table
-                    next_level = 1
-                    while next_level < len(lot_table):
-                        target_nanpin_price = pos.first_entry_price - next_level * self.config.grid_step
-                        if l <= target_nanpin_price:
-                            nanpin_p = round(target_nanpin_price / self.config.tick_size) * self.config.tick_size
-                            add_lots = lot_table[next_level]
-                            add_fee = add_lots * self.config.fee_per_lot
-                            
-                            pos.entries.append(PositionEntry(
-                                level=next_level,
-                                time=t,
-                                price=nanpin_p,
-                                lots=add_lots,
-                                fee=add_fee
-                            ))
-                            
-                            signal_events.append({
-                                'time': t,
-                                'price': nanpin_p,
-                                'event': 'NANPIN',
-                                'detail': f'LONGナンピン#{next_level} ({add_lots}枚 @ ¥{nanpin_p:,.0f}, 平均: ¥{pos.avg_price:,.0f})'
-                            })
-                            next_level += 1
+                    # ★【重要修正】エントリーした同一バー内でのナンピン執行
+                    # 逆張り（not is_trend）かつ LONG の場合のみ執行（順張り時は次バー以降に正しく判定）
+                    if not is_trend and pos.pos_type == 'LONG':
+                        lot_table = self.config.lot_table
+                        next_level = 1
+                        while next_level < len(lot_table):
+                            target_nanpin_price = pos.first_entry_price - next_level * self.config.grid_step
+                            if l <= target_nanpin_price:
+                                nanpin_p = round(target_nanpin_price / self.config.tick_size) * self.config.tick_size
+                                add_lots = lot_table[next_level]
+                                add_fee = add_lots * self.config.fee_per_lot
+                                
+                                pos.entries.append(PositionEntry(
+                                    level=next_level,
+                                    time=t,
+                                    price=nanpin_p,
+                                    lots=add_lots,
+                                    fee=add_fee
+                                ))
+                                
+                                signal_events.append({
+                                    'time': t,
+                                    'price': nanpin_p,
+                                    'event': 'NANPIN',
+                                    'detail': f'LONGナンピン#{next_level} ({add_lots}枚 @ ¥{nanpin_p:,.0f}, 平均: ¥{pos.avg_price:,.0f})'
+                                })
+                                next_level += 1
+                            else:
+                                break
+
+                # ★【重要新機能】新規エントリーした同一バー内での利確（同足エグジット）判定
+                # エントリー同一足の中でナンピンがなく（1枚のまま）、かつ利確目標価格に達していた場合、
+                # 翌足への持ち越しによる約定価格の歪みを防ぎ、同一バー内で目標指値にて美しく決済を完結させる。
+                if pos is not None and pos.nanpin_count == 0:
+                    same_bar_tp = False
+                    target_tp = 0.0
+                    
+                    if not is_trend:
+                        if pos.pos_type == 'SHORT':
+                            target_tp = pos.avg_price - self.config.tp_delta
+                            # 終値が利確ライン以下で引けた場合（高値ブレイク後に確実に利確ラインを下抜け通過）
+                            if c <= target_tp:
+                                same_bar_tp = True
+                        elif pos.pos_type == 'LONG':
+                            target_tp = pos.avg_price + self.config.tp_delta
+                            # 終値が利確ライン以上で引けた場合（安値ブレイク後に確実に利確ラインを上抜け通過）
+                            if c >= target_tp:
+                                same_bar_tp = True
+                    else: # is_trend
+                        if pos.pos_type == 'LONG':
+                            target_tp = pos.avg_price + self.config.tp_delta
+                            if h >= target_tp:
+                                same_bar_tp = True
+                        elif pos.pos_type == 'SHORT':
+                            target_tp = pos.avg_price - self.config.tp_delta
+                            if l <= target_tp:
+                                same_bar_tp = True
+
+                    if same_bar_tp:
+                        exit_price = round(target_tp / self.config.tick_size) * self.config.tick_size
+                        exit_fee = pos.total_lots * self.config.fee_per_lot
+                        if pos.pos_type == 'SHORT':
+                            gross_pnl = (pos.avg_price - exit_price) * pos.total_lots * self.config.multiplier
                         else:
-                            break
+                            gross_pnl = (exit_price - pos.avg_price) * pos.total_lots * self.config.multiplier
+                        net_pnl = gross_pnl - pos.total_entry_fee - exit_fee
+                        
+                        trade_logs.append({
+                            'trade_no': len(trade_logs) + 1,
+                            'pos_type': pos.pos_type,
+                            'entry_time': pos.first_entry_time,
+                            'exit_time': t,
+                            'entry_price': pos.first_entry_price,
+                            'avg_entry_price': pos.avg_price,
+                            'exit_price': exit_price,
+                            'total_lots': pos.total_lots,
+                            'nanpin_count': pos.nanpin_count,
+                            'exit_reason': f'TAKE_PROFIT (TP_DELTA (+{self.config.tp_delta:.0f}円) [同足決済])',
+                            'gross_pnl': gross_pnl,
+                            'total_fee': pos.total_entry_fee + exit_fee,
+                            'net_pnl': net_pnl,
+                            'holding_bars': 0
+                        })
+                        
+                        signal_events.append({
+                            'time': t,
+                            'price': exit_price,
+                            'event': 'TP_EXIT',
+                            'detail': f'{pos.pos_type}同足利確 ({pos.total_lots}枚, 損益: ¥{net_pnl:,.0f})'
+                        })
+                        
+                        current_equity += net_pnl
+                        pos = None
 
             # ----------------------------------------------------
             # C. バー終了時の含み損益・エクイティ・ポジション状態記録

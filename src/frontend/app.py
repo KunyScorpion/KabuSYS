@@ -259,7 +259,8 @@ def run_strategy_backtest(df_data: pd.DataFrame) -> Any:
         return bt_res
 
     else:
-        # 高値安値ライン突破・逆張りグリッドナンピン戦略
+        # 高値安値ライン突破・逆張り/順張りIFグリッドナンピン戦略
+        p_entry_mode = st.session_state.get("bt_entry_mode", bt_saved.get("entry_mode", "CONTRARIAN"))
         p_n_period = st.session_state.get("bt_n_period", bt_saved.get("n_period", 20))
         p_entry_delta = st.session_state.get("bt_entry_delta", bt_saved.get("entry_delta", 200.0))
         p_grid_step = st.session_state.get("bt_grid_step", bt_saved.get("grid_step", 250.0))
@@ -267,9 +268,9 @@ def run_strategy_backtest(df_data: pd.DataFrame) -> Any:
         p_sl_amount = st.session_state.get("bt_sl_amount", bt_saved.get("sl_amount", 500000.0))
         p_emergency_exit = st.session_state.get("bt_emergency_exit_toggle", bt_saved.get("emergency_breakeven_exit", False))
         current_lot_text = st.session_state.get("bt_lot_table_text", bt_saved.get("lot_table", "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10"))
-        bt_capital = st.session_state.get("bt_capital_input", bt_saved.get("capital", 3000000.0))
+        bt_capital = st.session_state.get("bt_capital", bt_saved.get("capital", 3000000.0))
         bt_margin = st.session_state.get("bt_margin_input", bt_saved.get("margin_per_lot", 25000.0))
-        bt_fee = st.session_state.get("bt_fee_input", bt_saved.get("fee", 15.0))
+        bt_fee = st.session_state.get("bt_fee", bt_saved.get("fee", 11.0))
 
         try:
             parsed_lots = [int(x.strip()) for x in str(current_lot_text).split(',') if x.strip()]
@@ -281,6 +282,7 @@ def run_strategy_backtest(df_data: pd.DataFrame) -> Any:
         # 設定の永続化
         st.session_state["backtest_settings"] = {
             "strategy_key": "grid_nanpin",
+            "entry_mode": str(p_entry_mode),
             "n_period": int(p_n_period),
             "entry_delta": float(p_entry_delta),
             "grid_step": float(p_grid_step),
@@ -304,6 +306,7 @@ def run_strategy_backtest(df_data: pd.DataFrame) -> Any:
         })
         
         cfg = GridNanpinConfig(
+            entry_mode=str(p_entry_mode),
             n_period=int(p_n_period),
             entry_delta=float(p_entry_delta),
             grid_step=float(p_grid_step),
@@ -868,9 +871,10 @@ def main():
                     "片道手数料 (円/枚)", 
                     min_value=0, 
                     max_value=500, 
-                    value=int(bt_saved.get("fee", 15)), 
-                    step=5, 
-                    key="bt_fee"
+                    value=int(bt_saved.get("fee", 11)), 
+                    step=1, 
+                    key="bt_fee",
+                    help="日経225マイクロ先物の片道手数料（主要ネット証券: 税込約11円/枚）。デフォルト: 11円"
                 )
 
             # プラグイン削除（アンインストール）機能
@@ -899,7 +903,25 @@ def main():
             # ----------------------------------------------------
             with st.expander(f"⚙️ {selected_strategy_name} パラメータ設定 (クリックして開閉)", expanded=True):
                 if selected_strategy_key == "grid_nanpin":
-                    # --- 高値安値逆張りナンピン戦略のパラメータ ---
+                    # --- 高値安値逆張り/順張りナンピン戦略のパラメータ ---
+                    # 売買方向モード選択 (通常逆張り vs 順張りIF)
+                    saved_mode = bt_saved.get("entry_mode", "CONTRARIAN")
+                    mode_options = ["CONTRARIAN", "TREND"]
+                    mode_labels = {
+                        "CONTRARIAN": "🔄 通常モード: 逆張り (High突破でショート / Low突破でロング)",
+                        "TREND": "🚀 IFモード: 順張り (High突破でロング / Low突破でショート)"
+                    }
+                    selected_mode = st.radio(
+                        "**🎯 エントリー売買方向（IF検証モード切替）**",
+                        options=mode_options,
+                        index=0 if saved_mode != "TREND" else 1,
+                        format_func=lambda x: mode_labels[x],
+                        horizontal=True,
+                        key="bt_entry_mode",
+                        help="『もし同じHigh/Low突破判定ポイントで順張り（ブレイクアウト買い・売り）で入った場合』のシストレ挙動を同一のナンピン・利確ルールで比較検証できます。"
+                    )
+                    st.markdown("<div style='margin-bottom: 8px;'></div>", unsafe_allow_html=True)
+
                     p_c1, p_c2, p_c3 = st.columns(3)
                     with p_c1:
                         current_shared_hl = int(st.session_state.get("shared_hl_period", bt_saved.get("n_period", 20)))
@@ -932,7 +954,7 @@ def main():
                             value=float(bt_saved.get("entry_delta", 200.0)), 
                             step=50.0, 
                             key="bt_entry_delta",
-                            help="Highライン上抜けでショート、Lowライン下抜けでロングを開始するブレイク値幅です。"
+                            help="Highライン上抜け・Lowライン下抜けでエントリーを開始するブレイク値幅です（逆張りならHighでショート/Lowでロング、順張りIFならHighでロング/Lowでショート）。"
                         )
                     with p_c2:
                         p_grid_step = st.number_input(
@@ -1091,7 +1113,13 @@ def main():
                 m = res.metrics
 
                 st.markdown("---")
-                st.markdown("**📊 シミュレーション結果サマリー (KPI)**")
+                mode_str = ""
+                if hasattr(res, 'config') and hasattr(res.config, 'entry_mode'):
+                    if res.config.entry_mode == "TREND":
+                        mode_str = " <span style='background-color: #0d47a1; color: #90caf9; padding: 3px 10px; border-radius: 4px; font-size: 13px; font-weight: bold;'>🚀 IFモード (順張り検証)</span>"
+                    else:
+                        mode_str = " <span style='background-color: #1b5e20; color: #a5d6a7; padding: 3px 10px; border-radius: 4px; font-size: 13px; font-weight: bold;'>🔄 通常モード (逆張り)</span>"
+                st.markdown(f"**📊 シミュレーション結果サマリー (KPI)** {mode_str}", unsafe_allow_html=True)
                 
                 # サマリー指標カード
                 kpi_col1, kpi_col2, kpi_col3, kpi_col4, kpi_col5, kpi_col6 = st.columns(6)
