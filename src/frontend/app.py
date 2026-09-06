@@ -593,7 +593,8 @@ def main():
         # 5. メインチャート表示（Highcharts Stock）
         # ----------------------------------------------------
         bt_res_saved = st.session_state.get("backtest_result", None)
-        bar_metrics_list = bt_res_saved.equity_curve.to_dict('records') if bt_res_saved is not None and hasattr(bt_res_saved, 'equity_curve') else []
+        bar_metrics_df = getattr(bt_res_saved, 'equity_curve', getattr(bt_res_saved, 'equity_df', None)) if bt_res_saved is not None else None
+        bar_metrics_list = bar_metrics_df.to_dict('records') if bar_metrics_df is not None and not bar_metrics_df.empty else []
 
         render_highstock_chart(
             df_ohlcv=df_plot,

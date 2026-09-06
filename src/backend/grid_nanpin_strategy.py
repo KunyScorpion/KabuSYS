@@ -137,6 +137,7 @@ class BacktestResult:
         self.df_bars = df_bars
         self.trades_df = pd.DataFrame(trade_logs) if trade_logs else pd.DataFrame()
         self.equity_df = equity_curve
+        self.equity_curve = equity_curve # Highcharts描画連携用エイリアス
         self.signals_df = pd.DataFrame(signal_events) if signal_events else pd.DataFrame()
         self.metrics = self._calculate_metrics()
 
