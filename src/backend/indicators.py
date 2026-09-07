@@ -152,6 +152,29 @@ class IndicatorCalculator:
                 {"key": "pivot_lbop", "name": "LBOP", "color": "#FF4081", "width": 1, "style": "dashed"},
             ]
         },
+        "Dynamic_SR": {
+            "name": "動的サポート・レジスタンス (Dynamic S/R)",
+            "type": "main",
+            "is_custom_overlay": True,
+            "params": [
+                {"id": "strong_window", "name": "Strong左右足数", "type": "int", "default": 15, "min": 5, "max": 50},
+                {"id": "medium_window", "name": "Medium左右足数", "type": "int", "default": 8, "min": 3, "max": 30},
+                {"id": "weak_window", "name": "Weak左右足数", "type": "int", "default": 3, "min": 2, "max": 15},
+                {"id": "merge_threshold", "name": "近接マージ値幅 (円)", "type": "float", "default": 20.0, "min": 5.0, "max": 200.0, "step": 5.0},
+                {"id": "fade_medium_start", "name": "Medium減衰開始 (本)", "type": "int", "default": 40, "min": 10, "max": 200},
+                {"id": "fade_medium_end", "name": "Medium消滅 (本)", "type": "int", "default": 60, "min": 20, "max": 300},
+                {"id": "fade_weak_start", "name": "Weak減衰開始 (本)", "type": "int", "default": 15, "min": 5, "max": 100},
+                {"id": "fade_weak_end", "name": "Weak消滅 (本)", "type": "int", "default": 25, "min": 10, "max": 150},
+            ],
+            "series": [
+                {"key": "resistance_strong", "name": "抵抗線 (Strong: 実線2px/不透明1.0)", "color": "#ff4444", "width": 2.0},
+                {"key": "resistance_medium", "name": "抵抗線 (Medium: 実線1.5px/フェード)", "color": "#ff6b6b", "width": 1.5},
+                {"key": "resistance_weak", "name": "抵抗線 (Weak: 破線1px/フェード)", "color": "#ff8a80", "width": 1.0, "style": "dashed"},
+                {"key": "support_strong", "name": "支持線 (Strong: 実線2px/不透明1.0)", "color": "#00e676", "width": 2.0},
+                {"key": "support_medium", "name": "支持線 (Medium: 実線1.5px/フェード)", "color": "#4caf50", "width": 1.5},
+                {"key": "support_weak", "name": "支持線 (Weak: 破線1px/フェード)", "color": "#81c784", "width": 1.0, "style": "dashed"},
+            ]
+        },
 
         # --- サブチャート指標（オシレーター等） ---
         "MACD": {
@@ -539,6 +562,24 @@ class IndicatorCalculator:
             res["pivot_s2"] = s2
             res["pivot_hbop"] = hbop
             res["pivot_lbop"] = lbop
+
+        elif indicator_id == "Dynamic_SR":
+            from src.backend.support_resistance import DynamicLevelEngine, DynamicLevelConfig
+            cfg = DynamicLevelConfig(
+                strong_window=int(params.get("strong_window", 15)),
+                medium_window=int(params.get("medium_window", 8)),
+                weak_window=int(params.get("weak_window", 3)),
+                merge_threshold_points=float(params.get("merge_threshold", 20.0)),
+                fade_medium_start=int(params.get("fade_medium_start", 40)),
+                fade_medium_end=int(params.get("fade_medium_end", 60)),
+                fade_weak_start=int(params.get("fade_weak_start", 15)),
+                fade_weak_end=int(params.get("fade_weak_end", 25)),
+            )
+            engine = DynamicLevelEngine(cfg)
+            levels = engine.calculate_levels(df)
+            res.attrs["dynamic_levels"] = levels
+            res.attrs["dynamic_series"] = engine.to_highstock_series(levels)
+            res["active_sr_levels"] = len(levels)
 
         # --- サブ指標 ---
         elif indicator_id == "MACD":

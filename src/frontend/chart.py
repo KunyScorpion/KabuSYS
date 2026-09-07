@@ -15,6 +15,8 @@ def render_highstock_chart(
     show_volume: bool = False,
     height: int = 720,
     symbol_name: str = "日経225マイクロ",
+    dynamic_levels: List[Any] = None,
+    dynamic_sr_series: List[Dict[str, Any]] = None,
     **kwargs
 ):
     """
@@ -103,6 +105,9 @@ def render_highstock_chart(
     main_series_list = []
     for ind_id, df_ind in main_indicator_data.items():
         meta = main_indicator_meta.get(ind_id, {})
+        # 動的サポート・レジスタンスなど特殊オーバーレイは通常の折れ線としてはスキップ
+        if meta.get("is_custom_overlay", False):
+            continue
         for s_info in meta.get("series", []):
             s_key = s_info["key"]
             if s_key in df_ind.columns:
@@ -122,6 +127,21 @@ def render_highstock_chart(
                     "type": "line",
                     "yAxis": 0
                 })
+
+    # 2-B. 動的サポート・レジスタンス（水平線セグメント群）の構築
+    dynamic_sr_series_list = []
+    if dynamic_sr_series:
+        dynamic_sr_series_list.extend(dynamic_sr_series)
+    elif dynamic_levels:
+        from src.backend.support_resistance import DynamicLevelEngine
+        dynamic_sr_series_list.extend(DynamicLevelEngine().to_highstock_series(dynamic_levels))
+
+    # main_indicator_data から attrs に格納された動的シリーズを自動抽出
+    for ind_id, df_ind in main_indicator_data.items():
+        if hasattr(df_ind, "attrs") and "dynamic_series" in df_ind.attrs:
+            for ds in df_ind.attrs["dynamic_series"]:
+                if ds not in dynamic_sr_series_list:
+                    dynamic_sr_series_list.append(ds)
 
     # 3. サブ指標データの構築（下段に独立ペイン追加）
     sub_panes_list = []
@@ -208,6 +228,7 @@ def render_highstock_chart(
     ohlc_json = json.dumps(ohlc_data)
     volume_json = json.dumps(volume_data)
     main_series_json = json.dumps(main_series_list)
+    dynamic_sr_series_json = json.dumps(dynamic_sr_series_list)
     sub_panes_json = json.dumps(sub_panes_list)
     signals_series_json = json.dumps(signals_series_list)
     bt_map_json = json.dumps(bt_map)
@@ -345,6 +366,7 @@ def render_highstock_chart(
                     const ohlcData = {ohlc_json};
                     const volumeData = {volume_json};
                     const mainSeries = {main_series_json};
+                    const dynamicSRSeries = {dynamic_sr_series_json};
                     const subPanes = {sub_panes_json};
                     const signalsSeries = {signals_series_json};
                     const btMap = {bt_map_json};
@@ -803,6 +825,30 @@ def render_highstock_chart(
                             }}
                         }});
                     }});
+
+                    // 動的サポート・レジスタンスシリーズ（水平線セグメント群）を追加
+                    if (dynamicSRSeries && dynamicSRSeries.length > 0) {{
+                        dynamicSRSeries.forEach(ds => {{
+                            series.push({{
+                                type: 'line',
+                                id: ds.id,
+                                name: ds.name,
+                                data: ds.data,
+                                color: ds.color,
+                                lineWidth: ds.lineWidth || 1.5,
+                                dashStyle: ds.dashStyle || 'Solid',
+                                yAxis: 0,
+                                enableMouseTracking: ds.enableMouseTracking !== false,
+                                showInLegend: false,
+                                marker: {{ enabled: false }},
+                                zIndex: ds.zIndex || 4,
+                                tooltip: ds.tooltip,
+                                dataGrouping: {{
+                                    enabled: false
+                                }}
+                            }});
+                        }});
+                    }}
 
                     // 売買シグナルシリーズ（エントリー・ナンピン・決済）を追加
                     if (signalsSeries && signalsSeries.length > 0) {{

@@ -338,7 +338,7 @@ def main():
     if "settings_loaded" not in st.session_state:
         saved_settings = SettingsManager.load_settings()
         st.session_state["show_volume"] = saved_settings.get("show_volume", False)
-        st.session_state["main_indicators"] = saved_settings.get("main_indicators", ["SMA", "HI_LOW_Bands"])
+        st.session_state["main_indicators"] = saved_settings.get("main_indicators", ["SMA", "Dynamic_SR", "HI_LOW_Bands"])
         st.session_state["sub_indicators"] = saved_settings.get("sub_indicators", [])
         st.session_state["indicator_params"] = saved_settings.get("indicator_params", {})
         st.session_state["backtest_settings"] = saved_settings.get("backtest_settings", {
@@ -596,6 +596,13 @@ def main():
         bar_metrics_df = getattr(bt_res_saved, 'equity_curve', getattr(bt_res_saved, 'equity_df', None)) if bt_res_saved is not None else None
         bar_metrics_list = bar_metrics_df.to_dict('records') if bar_metrics_df is not None and not bar_metrics_df.empty else []
 
+        # 動的サポート・レジスタンスシリーズの明示的取得
+        dynamic_sr_series = []
+        if "Dynamic_SR" in main_indicator_data:
+            df_sr = main_indicator_data["Dynamic_SR"]
+            if hasattr(df_sr, "attrs") and "dynamic_series" in df_sr.attrs:
+                dynamic_sr_series = df_sr.attrs["dynamic_series"]
+
         render_highstock_chart(
             df_ohlcv=df_plot,
             main_indicator_data=main_indicator_data,
@@ -606,7 +613,8 @@ def main():
             bar_metrics=bar_metrics_list,
             show_volume=st.session_state.get("show_volume", False),
             height=720,
-            symbol_name=display_symbol_name
+            symbol_name=display_symbol_name,
+            dynamic_sr_series=dynamic_sr_series
         )
 
         # ----------------------------------------------------

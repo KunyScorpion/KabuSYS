@@ -1,7 +1,7 @@
 {
   "show_volume": false,
   "main_indicators": [
-    "HI_LOW_Bands"
+    "Dynamic_SR"
   ],
   "sub_indicators": [],
   "indicator_params": {
@@ -34,7 +34,7 @@
       "senkou_b": 52
     },
     "HI_LOW_Bands": {
-      "period": 20
+      "period": 8
     },
     "Keltner_Channel": {
       "ema_period": 20,
@@ -117,6 +117,16 @@
       "period1": 7,
       "period2": 14,
       "period3": 28
+    },
+    "Dynamic_SR": {
+      "strong_window": 15,
+      "medium_window": 8,
+      "weak_window": 3,
+      "merge_threshold": 20.0,
+      "fade_medium_start": 40,
+      "fade_medium_end": 60,
+      "fade_weak_start": 15,
+      "fade_weak_end": 25
     }
   },
   "backtest_settings": {
