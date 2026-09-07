@@ -319,6 +319,27 @@ class TestDynamicLevelEngine(unittest.TestCase):
         self.assertLess(elapsed, 0.5, f"計算時間が長すぎます: {elapsed:.3f}秒")
         self.assertGreater(len(levels), 0)
 
+    def test_past_significant_levels_included(self):
+        """過去にブレイクされた有意なラインが描画用リストに含まれることのテスト"""
+        # 山（200円）ができた後、ブレイク（250円）されてBROKENになるデータ
+        # 左右3本でMedium山として認識させ、11本生存後にブレイク
+        prices = [100, 120, 150, 200, 150, 120, 100] + [100] * 12 + [250, 260, 270]
+        df = self._create_sample_df(prices)
+
+        cfg = DynamicLevelConfig(
+            medium_window=3,
+            weak_window=2,
+            include_past_levels=True,
+            max_past_levels=10
+        )
+        engine = DynamicLevelEngine(cfg)
+        levels = engine.calculate_levels(df, apply_filter=True)
+
+        # 過去にブレイクされた200円のラインが結果に含まれていること
+        past_broken = [l for l in levels if l.price == 200.0 and l.status == LevelStatus.BROKEN]
+        self.assertEqual(len(past_broken), 1)
+        self.assertIsNotNone(past_broken[0].end_time)
+
 
 if __name__ == "__main__":
     unittest.main()

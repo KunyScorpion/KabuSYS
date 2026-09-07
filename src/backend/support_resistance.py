@@ -74,6 +74,8 @@ class DynamicLevelConfig:
     # 描画間引き・フィルター設定
     price_distance_pct: float = 0.025      # 現在価格からの許容距離（デフォルト: ±2.5%以内のみ表示）
     max_levels_per_side: int = 4           # 現在価格から近い順に保持する最大本数（上下各4本、計最大8本）
+    include_past_levels: bool = True       # 過去にブレイク・消滅した有意なラインもブレイク足まで描画するか
+    max_past_levels: int = 50              # 過去ラインの最大描画本数（直近から最大50本に制限しパフォーマンス維持）
     
     # 描画色設定（RGBAベース HEX）
     color_resistance: str = "#ff1744"  # 抵抗線ベース色（鮮やかなネオンレッド）
@@ -282,9 +284,33 @@ class DynamicLevelEngine:
         if include_broken:
             return all_levels_history
 
-        if apply_filter:
-            return self.filter_for_display(active_levels, current_price)
-        return active_levels
+        # 1. 最新足時点でのACTIVEラインの厳選（現在価格±2.5%以内、上下各4本、近接マージ）
+        filtered_active = self.filter_for_display(active_levels, current_price) if apply_filter else active_levels
+
+        # 2. 過去の有意なライン（BROKEN / EXPIRED）の抽出と描画追加
+        if apply_filter and cfg.include_past_levels:
+            past_levels = [l for l in all_levels_history if l.status != LevelStatus.ACTIVE]
+            # 有意な条件：
+            # - Strong または touch_count >= 2 または (Medium かつ 生存足数 >= 10)
+            # - 即死ノイズ（生存足数 < 3本）は除外
+            scored = []
+            for l in past_levels:
+                if l.bars_alive < 3:
+                    continue
+                if l.strength >= LevelStrength.STRONG or l.touch_count >= 2 or (l.strength >= LevelStrength.MEDIUM and l.bars_alive >= 10):
+                    # 重要度スコア: 反発回数 (20pt) + 強度 (10pt) + 存続足数 (最大100pt)
+                    score = (l.touch_count * 20) + (l.strength * 10) + min(l.bars_alive, 100)
+                    scored.append((score, l))
+
+            # スコア上位 max_past_levels 本を抽出（全期間から重要な節目を均等・厳選）
+            scored.sort(key=lambda x: x[0], reverse=True)
+            top_past = [item[1] for item in scored[:cfg.max_past_levels]]
+            # チャート表示用に時系列昇順に整列
+            top_past.sort(key=lambda x: x.created_time)
+
+            return top_past + filtered_active
+
+        return filtered_active
 
     def filter_for_display(
         self,
@@ -475,12 +501,13 @@ class DynamicLevelEngine:
         sup_rgb = self._hex_to_rgb(cfg.color_support)
 
         for lvl in levels:
-            if lvl.opacity <= 0.0:
-                continue
-
             x_start = int(lvl.created_time.timestamp() * 1000)
             end_time = lvl.end_time or lvl.created_time
-            x_end = int(end_time.timestamp() * 1000) + future_extension_ms
+            ext_ms = future_extension_ms if lvl.status == LevelStatus.ACTIVE else 0
+            x_end = int(end_time.timestamp() * 1000) + ext_ms
+            # 点描画を防ぐため最低でも1本分の幅を確保
+            if x_end <= x_start:
+                x_end = x_start + 60 * 1000
 
             # スタイル設定
             if lvl.strength == LevelStrength.STRONG:
@@ -496,13 +523,18 @@ class DynamicLevelEngine:
                 dash_style = "Dash"
                 strength_label = "Weak"
 
-            # 色設定（不透明度を反映、ダークテーマでの最低視認性を確保）
-            effective_opacity = max(0.25, lvl.opacity)
+            # 色設定（過去ラインも含めダークテーマでの視認性を確保）
+            is_active = (lvl.status == LevelStatus.ACTIVE)
+            min_op = 0.35 if is_active else 0.30
+            effective_opacity = max(min_op, lvl.opacity if is_active else min(0.6, lvl.opacity + 0.2))
             base_rgb = res_rgb if lvl.type == LevelType.RESISTANCE else sup_rgb
             rgba_str = f"rgba({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]}, {effective_opacity:.2f})"
             type_label = "抵抗線" if lvl.type == LevelType.RESISTANCE else "支持線"
 
+            status_desc = "現在有効" if is_active else ("ブレイク済" if lvl.status == LevelStatus.BROKEN else "消滅済")
             series_name = f"{type_label} ({strength_label}: ¥{lvl.price:,.0f})"
+            if not is_active:
+                series_name += f" [{status_desc}]"
             if lvl.touch_count > 1:
                 series_name += f" [反発{lvl.touch_count}回]"
 
@@ -526,8 +558,8 @@ class DynamicLevelEngine:
                     "pointFormat": (
                         f'<span style="color:{rgba_str}">●</span> '
                         f'<b>{type_label} ({strength_label})</b>: ¥{{point.y:,.0f}}<br/>'
-                        f'　強度: {lvl.strength} / 不透明度: {lvl.opacity:.1%}<br/>'
-                        f'　反発回数: {lvl.touch_count}回 / 経過足数: {lvl.bars_alive}本<br/>'
+                        f'　状態: {status_desc} / 強度: {lvl.strength}<br/>'
+                        f'　反発回数: {lvl.touch_count}回 / 存続足数: {lvl.bars_alive}本<br/>'
                     )
                 }
             })

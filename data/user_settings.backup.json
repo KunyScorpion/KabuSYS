@@ -1,8 +1,6 @@
 {
   "show_volume": false,
-  "main_indicators": [
-    "Dynamic_SR"
-  ],
+  "main_indicators": [],
   "sub_indicators": [],
   "indicator_params": {
     "SMA": {
@@ -126,7 +124,10 @@
       "fade_medium_start": 40,
       "fade_medium_end": 60,
       "fade_weak_start": 15,
-      "fade_weak_end": 25
+      "fade_weak_end": 25,
+      "price_distance_pct": 2.5,
+      "max_levels_per_side": 4,
+      "strong_max_bars": 500
     }
   },
   "backtest_settings": {
