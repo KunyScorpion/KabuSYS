@@ -129,7 +129,8 @@
       "fade_weak_end": 25,
       "price_distance_pct": 2.5,
       "max_levels_per_side": 4,
-      "strong_max_bars": 500
+      "strong_max_bars": 500,
+      "max_past_levels": 50
     }
   },
   "backtest_settings": {

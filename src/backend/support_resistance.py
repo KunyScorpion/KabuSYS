@@ -28,9 +28,11 @@ class LevelStrength(int, Enum):
 
 class LevelStatus(str, Enum):
     """ラインの状態"""
-    ACTIVE = "ACTIVE"    # 有効（現在も生きているライン）
-    BROKEN = "BROKEN"    # 終値でブレイクされ無効化
-    EXPIRED = "EXPIRED"  # 寿命切れでフェードアウト消滅
+    ACTIVE = "ACTIVE"        # 有効（現在も生きているライン）
+    FLIPPED = "FLIPPED"      # サポレジ転換中（ブレイク後に役目が反転し回帰・リテスト待ち）
+    RESOLVED = "RESOLVED"    # 回帰完了・回収消滅（押し目・戻りタッチで役目終了）
+    BROKEN = "BROKEN"        # 終値でブレイクされ無効化
+    EXPIRED = "EXPIRED"      # 寿命切れでフェードアウト消滅
 
 
 @dataclass
@@ -44,11 +46,16 @@ class PriceLevel:
     created_time: pd.Timestamp   # 山・谷の形成日時
     strength: int                # 1: Weak, 2: Medium, 3: Strong
     opacity: float               # 1.0 〜 0.0
-    status: LevelStatus          # ACTIVE, BROKEN, EXPIRED
+    status: LevelStatus          # ACTIVE, FLIPPED, RESOLVED, BROKEN, EXPIRED
     bars_alive: int = 0          # 確定してからの経過足数
     end_at_idx: Optional[int] = None   # 終了足（ブレイク足または最新足）
     end_time: Optional[pd.Timestamp] = None
     touch_count: int = 1         # 反発・マージ回数
+    is_flipped: bool = False     # サポレジ転換（ロールリバーサル）したか
+    flipped_at_idx: Optional[int] = None # 転換（ブレイク）された足インデックス
+    flipped_time: Optional[pd.Timestamp] = None
+    original_type: Optional[LevelType] = None # 転換前の元の種類（RESISTANCE / SUPPORT）
+    has_cleared_gap: bool = False # 転換後にラインから一度離脱（乖離）したか
 
 
 @dataclass
@@ -66,6 +73,9 @@ class DynamicLevelConfig:
     fade_weak_start: int = 15    # Weak: 減衰開始足数
     fade_weak_end: int = 25      # Weak: 完全消滅足数
     
+    # サポレジ転換（ロールリバーサル）＆回帰回収
+    enable_role_reversal: bool = True     # ブレイク後に支持/抵抗逆転し回帰タッチで回収消滅させるか
+    
     # 近接マージ閾値（100円未満の近接ラインを統合）
     merge_threshold_points: float = 100.0  # 近接判定の値幅（デフォルト: 100円）
     merge_threshold_pct: float = 0.002     # 近接判定の価格比率（0.2%）
@@ -78,8 +88,10 @@ class DynamicLevelConfig:
     max_past_levels: int = 50              # 過去ラインの最大描画本数（直近から最大50本に制限しパフォーマンス維持）
     
     # 描画色設定（RGBAベース HEX）
-    color_resistance: str = "#ff1744"  # 抵抗線ベース色（鮮やかなネオンレッド）
-    color_support: str = "#00e676"     # 支持線ベース色（鮮やかなエメラルドグリーン）
+    color_resistance: str = "#ff1744"         # 抵抗線ベース色（鮮やかなネオンレッド）
+    color_support: str = "#00e676"            # 支持線ベース色（鮮やかなエメラルドグリーン）
+    color_flipped_support: str = "#00e5ff"    # 抵抗線→転換支持線（シアン）
+    color_flipped_resistance: str = "#ff9100" # 支持線→転換抵抗線（アンバーオレンジ）
 
 
 class DynamicLevelEngine:
@@ -139,30 +151,91 @@ class DynamicLevelEngine:
 
         # 逐次足確定ループ（バーを進めながらリアルタイムシミュレーション）
         for c in range(n_bars):
+            cur_high = highs[c]
+            cur_low = lows[c]
             cur_close = closes[c]
             cur_time = times[c]
 
             # ----------------------------------------------------
-            # 1. ブレイク判定（確定足の終値がラインを突き抜けたか）
+            # 1. ブレイク・サポレジ転換・回帰回収判定
             # ----------------------------------------------------
             remaining_active: List[PriceLevel] = []
             for lvl in active_levels:
-                is_broken = False
-                if lvl.type == LevelType.RESISTANCE:
-                    # 終値が抵抗線を上回った
-                    if cur_close > lvl.price:
+                # --- ケース1: 既にサポレジ転換しているライン (FLIPPED) ---
+                if lvl.is_flipped:
+                    if lvl.type == LevelType.SUPPORT:
+                        # [元抵抗線 -> 転換支持線]
+                        # ① ブレイク足からの上方離脱の判定（安値がラインより上にある）
+                        if cur_low > lvl.price:
+                            lvl.has_cleared_gap = True
+
+                        # ② 回帰・回収（RESOLVED）の判定
+                        # 一度離脱した後に、価格が下落してラインにタッチした瞬間（安値 <= ライン価格）
+                        if lvl.has_cleared_gap and cur_low <= lvl.price:
+                            lvl.status = LevelStatus.RESOLVED
+                            lvl.end_at_idx = c
+                            lvl.end_time = cur_time
+                            # 回帰・回収完了によりアクティブから終了（役目を果たす）
+                            continue
+
+                        # ③ 転換支持線をさらに終値で下抜け割り込んだ場合（完全ブレイク）
+                        if cur_close < lvl.price and lvl.has_cleared_gap:
+                            lvl.status = LevelStatus.BROKEN
+                            lvl.end_at_idx = c
+                            lvl.end_time = cur_time
+                            continue
+
+                    elif lvl.type == LevelType.RESISTANCE:
+                        # [元支持線 -> 転換抵抗線]
+                        # ① ブレイク足からの下方離脱の判定（高値がラインより下にある）
+                        if cur_high < lvl.price:
+                            lvl.has_cleared_gap = True
+
+                        # ② 回帰・回収（RESOLVED）の判定
+                        # 一度離脱した後に、価格が上昇してラインにタッチした瞬間（高値 >= ライン価格）
+                        if lvl.has_cleared_gap and cur_high >= lvl.price:
+                            lvl.status = LevelStatus.RESOLVED
+                            lvl.end_at_idx = c
+                            lvl.end_time = cur_time
+                            # 回帰・回収完了によりアクティブから終了（役目を果たす）
+                            continue
+
+                        # ③ 転換抵抗線をさらに終値で上抜け突破した場合（完全ブレイク）
+                        if cur_close > lvl.price and lvl.has_cleared_gap:
+                            lvl.status = LevelStatus.BROKEN
+                            lvl.end_at_idx = c
+                            lvl.end_time = cur_time
+                            continue
+
+                    remaining_active.append(lvl)
+
+                # --- ケース2: 通常の初期ライン (ACTIVE) ---
+                else:
+                    is_broken = False
+                    if lvl.type == LevelType.RESISTANCE and cur_close > lvl.price:
                         is_broken = True
-                elif lvl.type == LevelType.SUPPORT:
-                    # 終値が支持線を下回った
-                    if cur_close < lvl.price:
+                    elif lvl.type == LevelType.SUPPORT and cur_close < lvl.price:
                         is_broken = True
 
-                if is_broken:
-                    lvl.status = LevelStatus.BROKEN
-                    lvl.end_at_idx = c
-                    lvl.end_time = cur_time
-                else:
-                    remaining_active.append(lvl)
+                    if is_broken:
+                        if cfg.enable_role_reversal:
+                            # サポレジ転換（Role Reversal）
+                            lvl.status = LevelStatus.FLIPPED
+                            lvl.is_flipped = True
+                            lvl.original_type = lvl.type
+                            # 属性を反転（抵抗線 -> 支持線、支持線 -> 抵抗線）
+                            lvl.type = LevelType.SUPPORT if lvl.original_type == LevelType.RESISTANCE else LevelType.RESISTANCE
+                            lvl.flipped_at_idx = c
+                            lvl.flipped_time = cur_time
+                            lvl.has_cleared_gap = False
+                            # 転換支持/抵抗線として引き続き保持
+                            remaining_active.append(lvl)
+                        else:
+                            lvl.status = LevelStatus.BROKEN
+                            lvl.end_at_idx = c
+                            lvl.end_time = cur_time
+                    else:
+                        remaining_active.append(lvl)
 
             active_levels = remaining_active
 
@@ -287,22 +360,23 @@ class DynamicLevelEngine:
         # 1. 最新足時点でのACTIVEラインの厳選（現在価格±2.5%以内、上下各4本、近接マージ）
         filtered_active = self.filter_for_display(active_levels, current_price) if apply_filter else active_levels
 
-        # 2. 過去の有意なライン（BROKEN / EXPIRED）の抽出と描画追加
+        # 2. 過去の有意なライン（RESOLVED / BROKEN / EXPIRED）の抽出と描画追加
         if apply_filter and cfg.include_past_levels:
-            past_levels = [l for l in all_levels_history if l.status != LevelStatus.ACTIVE]
+            past_levels = [l for l in all_levels_history if l.status not in (LevelStatus.ACTIVE, LevelStatus.FLIPPED)]
             # 有意な条件：
+            # - RESOLVED（回帰・回収完了）は最優先（手書き図の主役）
             # - Strong または touch_count >= 2 または (Medium かつ 生存足数 >= 10)
-            # - 即死ノイズ（生存足数 < 3本）は除外
+            # - 即死ノイズ（生存足数 < 3本 かつ未回収）は除外
             scored = []
             for l in past_levels:
-                if l.bars_alive < 3:
+                if l.bars_alive < 3 and l.status != LevelStatus.RESOLVED:
                     continue
-                if l.strength >= LevelStrength.STRONG or l.touch_count >= 2 or (l.strength >= LevelStrength.MEDIUM and l.bars_alive >= 10):
-                    # 重要度スコア: 反発回数 (20pt) + 強度 (10pt) + 存続足数 (最大100pt)
-                    score = (l.touch_count * 20) + (l.strength * 10) + min(l.bars_alive, 100)
+                if l.status == LevelStatus.RESOLVED or l.strength >= LevelStrength.STRONG or l.touch_count >= 2 or (l.strength >= LevelStrength.MEDIUM and l.bars_alive >= 10):
+                    # 重要度スコア: 回収完了 (+30pt) + 反発回数 (20pt) + 強度 (10pt) + 存続足数 (最大100pt)
+                    score = (30 if l.status == LevelStatus.RESOLVED else 0) + (l.touch_count * 20) + (l.strength * 10) + min(l.bars_alive, 100)
                     scored.append((score, l))
 
-            # スコア上位 max_past_levels 本を抽出（全期間から重要な節目を均等・厳選）
+            # スコア上位 max_past_levels 本を抽出（全期間から重要な節目・回収ラインを均等・厳選）
             scored.sort(key=lambda x: x[0], reverse=True)
             top_past = [item[1] for item in scored[:cfg.max_past_levels]]
             # チャート表示用に時系列昇順に整列
@@ -389,21 +463,7 @@ class DynamicLevelEngine:
                     found_cluster = True
                     break
             if not found_cluster:
-                merged.append(PriceLevel(
-                    id=lvl.id,
-                    type=lvl.type,
-                    price=lvl.price,
-                    created_at_idx=lvl.created_at_idx,
-                    confirmed_at_idx=lvl.confirmed_at_idx,
-                    created_time=lvl.created_time,
-                    strength=lvl.strength,
-                    opacity=lvl.opacity,
-                    status=lvl.status,
-                    bars_alive=lvl.bars_alive,
-                    end_at_idx=lvl.end_at_idx,
-                    end_time=lvl.end_time,
-                    touch_count=lvl.touch_count
-                ))
+                merged.append(lvl)
 
         return merged
 
@@ -419,38 +479,30 @@ class DynamicLevelEngine:
         all_levels_history: List[PriceLevel],
         existing_peak_map: Dict[Tuple[int, LevelType], PriceLevel]
     ):
-        """検出された山・谷の昇格、近接マージ、または新規登録を処理"""
+        """検出された山・谷の処理（重複チェック、近接マージ、新規生成）"""
         cfg = self.config
-
-        # 1. 同一ピーク足からの昇格チェック（例: Weakとして登録済みだが、足が進んでMedium/Strong条件を満たした）
         peak_key = (peak_idx, lvl_type)
+
+        # 1. 同一の足で異なるウィンドウ（StrongとMediumなど）で重複検出された場合
         if peak_key in existing_peak_map:
-            existing = existing_peak_map[peak_key]
-            if strength.value > existing.strength:
-                existing.strength = strength.value
-                if strength == LevelStrength.STRONG:
-                    existing.opacity = 1.0
-                elif strength == LevelStrength.MEDIUM:
-                    existing.opacity = max(existing.opacity, 0.8)
-                existing.bars_alive = 0  # 昇格により寿命リフレッシュ
+            prev_level = existing_peak_map[peak_key]
+            if strength.value > prev_level.strength:
+                prev_level.strength = strength.value
+                prev_level.opacity = 1.0 if strength == LevelStrength.STRONG else 0.8
             return
 
-        # 2. 近接マージ判定（既存のアクティブな同種ラインとの距離）
+        # 2. 既存アクティブラインとの近接マージチェック
+        merge_threshold = cfg.merge_threshold_points
         merged_line = None
         for active_lvl in active_levels:
-            if active_lvl.type == lvl_type:
-                # 距離計算
-                diff = abs(active_lvl.price - price)
-                threshold = (active_lvl.price * cfg.merge_threshold_pct) if cfg.use_pct_merge else cfg.merge_threshold_points
-                if diff <= threshold:
-                    merged_line = active_lvl
-                    break
+            if active_lvl.type == lvl_type and abs(active_lvl.price - price) <= merge_threshold:
+                merged_line = active_lvl
+                break
 
         if merged_line is not None:
-            # 近接ラインが存在する場合は新規生成せず、既存ラインの強度を引き上げ
-            merged_line.strength = min(3, merged_line.strength + 1)
+            # 近接ラインがある場合は反発回数と強度を加算・更新
             merged_line.touch_count += 1
-            # 価格をより強い極値（抵抗なら高い方、支持なら低い方）に更新
+            merged_line.strength = min(3, max(merged_line.strength, strength.value + 1))
             if lvl_type == LevelType.RESISTANCE:
                 merged_line.price = max(merged_line.price, price)
             else:
@@ -494,16 +546,20 @@ class DynamicLevelEngine:
     ) -> List[Dict[str, Any]]:
         """
         Highcharts Stockで描画するためのシリーズ定義辞書の配列に変換する。
+        サポレジ転換（FLIPPED）および回帰回収（RESOLVED）のビジュアル表示に対応。
         """
         series_list = []
         cfg = self.config
         res_rgb = self._hex_to_rgb(cfg.color_resistance)
         sup_rgb = self._hex_to_rgb(cfg.color_support)
+        flip_sup_rgb = self._hex_to_rgb(cfg.color_flipped_support)
+        flip_res_rgb = self._hex_to_rgb(cfg.color_flipped_resistance)
 
         for lvl in levels:
             x_start = int(lvl.created_time.timestamp() * 1000)
             end_time = lvl.end_time or lvl.created_time
-            ext_ms = future_extension_ms if lvl.status == LevelStatus.ACTIVE else 0
+            is_active_like = lvl.status in (LevelStatus.ACTIVE, LevelStatus.FLIPPED)
+            ext_ms = future_extension_ms if is_active_like else 0
             x_end = int(end_time.timestamp() * 1000) + ext_ms
             # 点描画を防ぐため最低でも1本分の幅を確保
             if x_end <= x_start:
@@ -523,20 +579,56 @@ class DynamicLevelEngine:
                 dash_style = "Dash"
                 strength_label = "Weak"
 
-            # 色設定（過去ラインも含めダークテーマでの視認性を確保）
-            is_active = (lvl.status == LevelStatus.ACTIVE)
-            min_op = 0.35 if is_active else 0.30
-            effective_opacity = max(min_op, lvl.opacity if is_active else min(0.6, lvl.opacity + 0.2))
-            base_rgb = res_rgb if lvl.type == LevelType.RESISTANCE else sup_rgb
-            rgba_str = f"rgba({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]}, {effective_opacity:.2f})"
-            type_label = "抵抗線" if lvl.type == LevelType.RESISTANCE else "支持線"
+            # 転換ライン判定と色・ラベル
+            if lvl.is_flipped:
+                if lvl.type == LevelType.SUPPORT:
+                    base_rgb = flip_sup_rgb
+                    type_label = "抵抗線→転換支持線"
+                else:
+                    base_rgb = flip_res_rgb
+                    type_label = "支持線→転換抵抗線"
 
-            status_desc = "現在有効" if is_active else ("ブレイク済" if lvl.status == LevelStatus.BROKEN else "消滅済")
+                if lvl.status == LevelStatus.FLIPPED:
+                    status_desc = "転換中 (リテスト待ち)"
+                elif lvl.status == LevelStatus.RESOLVED:
+                    status_desc = "回収完了 (リテスト反発)"
+                elif lvl.status == LevelStatus.BROKEN:
+                    status_desc = "転換後ブレイク"
+                else:
+                    status_desc = "消滅済"
+            else:
+                base_rgb = res_rgb if lvl.type == LevelType.RESISTANCE else sup_rgb
+                type_label = "抵抗線" if lvl.type == LevelType.RESISTANCE else "支持線"
+                if lvl.status == LevelStatus.ACTIVE:
+                    status_desc = "現在有効"
+                elif lvl.status == LevelStatus.BROKEN:
+                    status_desc = "ブレイク済"
+                else:
+                    status_desc = "消滅済"
+
+            min_op = 0.40 if is_active_like else 0.35
+            effective_opacity = max(min_op, lvl.opacity if is_active_like else min(0.7, lvl.opacity + 0.25))
+            rgba_str = f"rgba({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]}, {effective_opacity:.2f})"
+
             series_name = f"{type_label} ({strength_label}: ¥{lvl.price:,.0f})"
-            if not is_active:
+            if not is_active_like or lvl.is_flipped:
                 series_name += f" [{status_desc}]"
             if lvl.touch_count > 1:
                 series_name += f" [反発{lvl.touch_count}回]"
+
+            # ツールチップ構築
+            tooltip_lines = [
+                f'<span style="color:{rgba_str}">●</span> <b>{type_label} ({strength_label})</b>: ¥{{point.y:,.0f}}',
+                f'　状態: <b>{status_desc}</b> / 強度: {lvl.strength}',
+                f'　形成: {lvl.created_time.strftime("%m/%d %H:%M")}'
+            ]
+            if lvl.is_flipped and lvl.flipped_time:
+                tooltip_lines.append(f'　転換: {lvl.flipped_time.strftime("%m/%d %H:%M")}')
+            if lvl.end_time and not is_active_like:
+                end_label = "回収" if lvl.status == LevelStatus.RESOLVED else "終了"
+                tooltip_lines.append(f'　{end_label}: {lvl.end_time.strftime("%m/%d %H:%M")}')
+            tooltip_lines.append(f'　反発回数: {lvl.touch_count}回 / 存続足数: {lvl.bars_alive}本')
+            tooltip_html = "<br/>".join(tooltip_lines) + "<br/>"
 
             series_list.append({
                 "type": "line",
@@ -555,12 +647,7 @@ class DynamicLevelEngine:
                 "marker": {"enabled": False},
                 "zIndex": 3 + lvl.strength,
                 "tooltip": {
-                    "pointFormat": (
-                        f'<span style="color:{rgba_str}">●</span> '
-                        f'<b>{type_label} ({strength_label})</b>: ¥{{point.y:,.0f}}<br/>'
-                        f'　状態: {status_desc} / 強度: {lvl.strength}<br/>'
-                        f'　反発回数: {lvl.touch_count}回 / 存続足数: {lvl.bars_alive}本<br/>'
-                    )
+                    "pointFormat": tooltip_html
                 }
             })
 

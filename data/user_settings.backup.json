@@ -1,6 +1,8 @@
 {
   "show_volume": false,
-  "main_indicators": [],
+  "main_indicators": [
+    "Dynamic_SR"
+  ],
   "sub_indicators": [],
   "indicator_params": {
     "SMA": {

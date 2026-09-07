@@ -157,6 +157,7 @@ class IndicatorCalculator:
             "type": "main",
             "is_custom_overlay": True,
             "params": [
+                {"id": "enable_role_reversal", "name": "サポレジ転換 (回帰回収)", "type": "bool", "default": True},
                 {"id": "price_distance_pct", "name": "現在価格許容距離 (%)", "type": "float", "default": 2.5, "min": 0.5, "max": 10.0, "step": 0.5},
                 {"id": "max_levels_per_side", "name": "片側最大本数 (本)", "type": "int", "default": 4, "min": 1, "max": 10, "step": 1},
                 {"id": "max_past_levels", "name": "過去ブレイクライン表示上限 (本)", "type": "int", "default": 50, "min": 0, "max": 200, "step": 10},
@@ -574,6 +575,7 @@ class IndicatorCalculator:
                 medium_window=int(params.get("medium_window", 8)),
                 weak_window=int(params.get("weak_window", 3)),
                 strong_max_bars=int(params.get("strong_max_bars", 1000)),
+                enable_role_reversal=bool(params.get("enable_role_reversal", True)),
                 merge_threshold_points=float(params.get("merge_threshold", 100.0)),
                 price_distance_pct=float(params.get("price_distance_pct", 2.5)) / 100.0,
                 max_levels_per_side=int(params.get("max_levels_per_side", 4)),

@@ -85,7 +85,7 @@ class TestDynamicLevelEngine(unittest.TestCase):
         self.assertGreaterEqual(bottom_level.strength, LevelStrength.MEDIUM)
 
     def test_break_invalidation(self):
-        """ブレイクによるライン無効化（BROKEN）テスト"""
+        """サポレジ転換無効時のブレイクによるライン無効化（BROKEN）テスト"""
         prices = [
             (100, 100, 100),
             (110, 110, 110),
@@ -101,7 +101,8 @@ class TestDynamicLevelEngine(unittest.TestCase):
         ]
         df = self._create_sample_df(prices)
 
-        cfg = DynamicLevelConfig(weak_window=3)
+        # サポレジ転換をOFFにした場合、即時BROKENになる
+        cfg = DynamicLevelConfig(weak_window=3, enable_role_reversal=False)
         engine = DynamicLevelEngine(cfg)
         
         active_levels = engine.calculate_levels(df, include_broken=False, apply_filter=False)
@@ -112,6 +113,48 @@ class TestDynamicLevelEngine(unittest.TestCase):
         self.assertIsNotNone(broken_peak)
         self.assertEqual(broken_peak.status, LevelStatus.BROKEN)
         self.assertEqual(broken_peak.end_at_idx, 9)
+
+    def test_role_reversal_and_resolution(self):
+        """ブレイク後のサポレジ転換（FLIPPED）と回帰タッチによる回収（RESOLVED）テスト"""
+        # 手書き図解のパターン：
+        # 1. 200円の抵抗線が形成される
+        # 2. 終値220円で上抜けブレイク -> 支持線にサポレジ転換（FLIPPED）
+        # 3. 250円まで上方乖離
+        # 4. 下落して200円にタッチ -> 回収完了（RESOLVED）して消滅！
+        prices = [
+            (100, 100, 100),
+            (120, 110, 115),
+            (150, 140, 145),
+            (200, 190, 195), # index 3: High 200 (山)
+            (150, 140, 145),
+            (130, 120, 125),
+            (110, 100, 105), # index 6: 抵抗線確定
+            # 上抜けブレイク
+            (230, 210, 220), # index 7: Close 220 > 200 -> サポレジ転換 (FLIPPED)!
+            # 上方乖離
+            (260, 240, 250), # index 8: High 260, Low 240 (十分離脱)
+            # 回帰（タッチ）
+            (210, 195, 205), # index 9: Low 195 <= 200 -> 回帰・回収完了 (RESOLVED)!
+            (230, 210, 220), # index 10: 反発上昇
+        ]
+        df = self._create_sample_df(prices)
+
+        cfg = DynamicLevelConfig(weak_window=3, enable_role_reversal=True)
+        engine = DynamicLevelEngine(cfg)
+
+        all_levels = engine.calculate_levels(df, include_broken=True)
+        level_200 = next((l for l in all_levels if l.price == 200.0), None)
+
+        self.assertIsNotNone(level_200)
+        self.assertTrue(level_200.is_flipped)
+        self.assertEqual(level_200.status, LevelStatus.RESOLVED)
+        self.assertEqual(level_200.end_at_idx, 9)
+        self.assertEqual(level_200.original_type, LevelType.RESISTANCE)
+        self.assertEqual(level_200.type, LevelType.SUPPORT)
+
+        # 現在有効なACTIVEラインからは回収済みのため除外されていること
+        active_levels = engine.calculate_levels(df, include_broken=False, apply_filter=False)
+        self.assertFalse(any(l.price == 200.0 and l.status == LevelStatus.ACTIVE for l in active_levels))
 
     def test_fadeout_weak(self):
         """Weakラインの経時フェードアウト（15本後から減衰、25本で消滅）テスト"""
@@ -320,25 +363,38 @@ class TestDynamicLevelEngine(unittest.TestCase):
         self.assertGreater(len(levels), 0)
 
     def test_past_significant_levels_included(self):
-        """過去にブレイクされた有意なラインが描画用リストに含まれることのテスト"""
-        # 山（200円）ができた後、ブレイク（250円）されてBROKENになるデータ
-        # 左右3本でMedium山として認識させ、11本生存後にブレイク
-        prices = [100, 120, 150, 200, 150, 120, 100] + [100] * 12 + [250, 260, 270]
+        """過去に回収・終了した有意なラインが描画用リストに含まれることのテスト"""
+        # 山（300円）ができた後、ブレイク（350円）されて転換、その後下落して300円タッチでRESOLVED回収
+        prices = [
+            (100, 100, 100), (120, 110, 115), (150, 140, 145),
+            (300, 290, 295), # peak
+            (150, 140, 145), (120, 110, 115), (100, 100, 100),
+            (100, 100, 100), (100, 100, 100), (100, 100, 100),
+            # ブレイク
+            (350, 330, 340),
+            # 乖離
+            (370, 350, 360),
+            # 回帰タッチ（回収）
+            (310, 295, 305),
+            # その後の推移
+            (400, 380, 390)
+        ]
         df = self._create_sample_df(prices)
 
         cfg = DynamicLevelConfig(
             medium_window=3,
             weak_window=2,
+            merge_threshold_points=20.0,
             include_past_levels=True,
             max_past_levels=10
         )
         engine = DynamicLevelEngine(cfg)
         levels = engine.calculate_levels(df, apply_filter=True)
 
-        # 過去にブレイクされた200円のラインが結果に含まれていること
-        past_broken = [l for l in levels if l.price == 200.0 and l.status == LevelStatus.BROKEN]
-        self.assertEqual(len(past_broken), 1)
-        self.assertIsNotNone(past_broken[0].end_time)
+        # 過去に回収完了した300円のラインが結果に含まれていること
+        past_resolved = [l for l in levels if l.price == 300.0 and l.status == LevelStatus.RESOLVED]
+        self.assertEqual(len(past_resolved), 1)
+        self.assertIsNotNone(past_resolved[0].end_time)
 
 
 if __name__ == "__main__":
