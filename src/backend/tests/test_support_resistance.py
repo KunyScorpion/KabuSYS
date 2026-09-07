@@ -24,8 +24,6 @@ class TestDynamicLevelEngine(unittest.TestCase):
         base_time = pd.to_datetime(start_time)
         times = [base_time + timedelta(minutes=i * freq_min) for i in range(len(prices))]
         
-        # open, high, low, close を作成
-        # prices がタプル (high, low, close) か単一数値かで分岐
         highs, lows, closes, opens = [], [], [], []
         for p in prices:
             if isinstance(p, (tuple, list)):
@@ -49,7 +47,6 @@ class TestDynamicLevelEngine(unittest.TestCase):
 
     def test_swing_high_detection_weak(self):
         """Weak（左右3本）のスイングハイ検出テスト"""
-        # 山の頂点をインデックス5に作成 (価格 100 -> 110 -> 120 -> 130 -> 140 -> 200 -> 140 -> 130 -> 120 -> 110)
         prices = [100, 110, 120, 130, 140, 200, 140, 130, 120, 110, 100]
         df = self._create_sample_df(prices)
 
@@ -59,9 +56,8 @@ class TestDynamicLevelEngine(unittest.TestCase):
             weak_window=3,
         )
         engine = DynamicLevelEngine(cfg)
-        levels = engine.calculate_levels(df)
+        levels = engine.calculate_levels(df, apply_filter=False)
 
-        # 頂点 (200) が抵抗線として検出されているはず
         res_levels = [lvl for lvl in levels if lvl.type == LevelType.RESISTANCE]
         self.assertGreaterEqual(len(res_levels), 1)
         peak_level = next((lvl for lvl in res_levels if lvl.price == 200.0), None)
@@ -71,10 +67,7 @@ class TestDynamicLevelEngine(unittest.TestCase):
 
     def test_swing_low_detection_medium(self):
         """Medium（左右8本）のスイングロー検出テスト"""
-        # 谷の底をインデックス10に作成
-        prices = [100 - abs(i - 10) * 5 for i in range(25)]
-        # インデックス10が最安値 (100 - 0 = 100 ではなく、谷にしたいので逆向きにする)
-        prices = [100 + abs(i - 10) * 5 for i in range(25)]  # index 10 is 100 (minimum)
+        prices = [100 + abs(i - 10) * 5 for i in range(25)]
         df = self._create_sample_df(prices)
 
         cfg = DynamicLevelConfig(
@@ -83,7 +76,7 @@ class TestDynamicLevelEngine(unittest.TestCase):
             weak_window=3,
         )
         engine = DynamicLevelEngine(cfg)
-        levels = engine.calculate_levels(df)
+        levels = engine.calculate_levels(df, apply_filter=False)
 
         sup_levels = [lvl for lvl in levels if lvl.type == LevelType.SUPPORT]
         self.assertGreaterEqual(len(sup_levels), 1)
@@ -93,7 +86,6 @@ class TestDynamicLevelEngine(unittest.TestCase):
 
     def test_break_invalidation(self):
         """ブレイクによるライン無効化（BROKEN）テスト"""
-        # 山（価格150）を作成した後、後続の足で終値が160になって上抜けブレイクする
         prices = [
             (100, 100, 100),
             (110, 110, 110),
@@ -112,11 +104,9 @@ class TestDynamicLevelEngine(unittest.TestCase):
         cfg = DynamicLevelConfig(weak_window=3)
         engine = DynamicLevelEngine(cfg)
         
-        # デフォルト（ACTIVEのみ）では消滅しているはず
-        active_levels = engine.calculate_levels(df, include_broken=False)
+        active_levels = engine.calculate_levels(df, include_broken=False, apply_filter=False)
         self.assertFalse(any(lvl.price == 150.0 for lvl in active_levels))
 
-        # include_broken=True では BROKEN 状態で取得できるはず
         all_levels = engine.calculate_levels(df, include_broken=True)
         broken_peak = next((lvl for lvl in all_levels if lvl.price == 150.0), None)
         self.assertIsNotNone(broken_peak)
@@ -125,9 +115,8 @@ class TestDynamicLevelEngine(unittest.TestCase):
 
     def test_fadeout_weak(self):
         """Weakラインの経時フェードアウト（15本後から減衰、25本で消滅）テスト"""
-        # 山を作った後、ブレイクせずに26本以上レンジ相場を継続
-        prices = [100, 110, 120, 130, 200, 130, 120, 110] # peak at index 4 (confirmed at index 7)
-        flat_prices = [100] * 30 # 30 bars flat (well beyond 25 bars)
+        prices = [100, 110, 120, 130, 200, 130, 120, 110]
+        flat_prices = [100] * 30
         df = self._create_sample_df(prices + flat_prices)
 
         cfg = DynamicLevelConfig(
@@ -137,11 +126,9 @@ class TestDynamicLevelEngine(unittest.TestCase):
         )
         engine = DynamicLevelEngine(cfg)
         
-        # 25本経過したのでEXPIREDになり、ACTIVEからは除外されているはず
-        active_levels = engine.calculate_levels(df, include_broken=False)
+        active_levels = engine.calculate_levels(df, include_broken=False, apply_filter=False)
         self.assertFalse(any(lvl.price == 200.0 for lvl in active_levels))
 
-        # 履歴にはEXPIREDとして記録されていること
         all_levels = engine.calculate_levels(df, include_broken=True)
         expired_peak = next((lvl for lvl in all_levels if lvl.price == 200.0), None)
         self.assertIsNotNone(expired_peak)
@@ -150,12 +137,8 @@ class TestDynamicLevelEngine(unittest.TestCase):
 
     def test_proximity_merge(self):
         """近接マージテスト（同値近辺の山がマージされて強度上昇・反発回数加算・極値更新）"""
-        # 1回目の山: 200 (index 4)
-        # 2回目の山: 202 (index 13, 差額2円 <= 閾値20円、ただし終値195でブレイクせず反発)
         prices = [
-            # 1つ目の山 (High 200, Close 190)
             100, 110, 120, 130, (200, 180, 190), 130, 120, 110, 100,
-            # 谷を挟んで2つ目の山 (High 202, Close 195: 終値は抵抗線200以下で反発)
             110, 120, 130, 140, (202, 185, 195), 140, 130, 120, 110, 100
         ]
         df = self._create_sample_df(prices)
@@ -165,17 +148,13 @@ class TestDynamicLevelEngine(unittest.TestCase):
             merge_threshold_points=20.0
         )
         engine = DynamicLevelEngine(cfg)
-        active_levels = engine.calculate_levels(df)
+        active_levels = engine.calculate_levels(df, apply_filter=False)
 
         res_levels = [lvl for lvl in active_levels if lvl.type == LevelType.RESISTANCE]
-        # 2つに分裂せず、1つのマージされたラインになっていること
         self.assertEqual(len(res_levels), 1)
         merged = res_levels[0]
-        # 価格がより高い極値（202）に更新されていること
         self.assertEqual(merged.price, 202.0)
-        # 反発回数が 2 回になっていること
         self.assertEqual(merged.touch_count, 2)
-        # 強度が 1(Weak) から 2(Medium) に引き上げられていること
         self.assertEqual(merged.strength, LevelStrength.MEDIUM)
 
     def test_to_highstock_series(self):
@@ -183,7 +162,7 @@ class TestDynamicLevelEngine(unittest.TestCase):
         prices = [100, 110, 120, 130, 200, 130, 120, 110, 100]
         df = self._create_sample_df(prices)
         engine = DynamicLevelEngine(DynamicLevelConfig(weak_window=3))
-        levels = engine.calculate_levels(df)
+        levels = engine.calculate_levels(df, apply_filter=False)
 
         series_list = engine.to_highstock_series(levels)
         self.assertGreaterEqual(len(series_list), 1)
@@ -195,50 +174,124 @@ class TestDynamicLevelEngine(unittest.TestCase):
         self.assertEqual(s["data"][1]["y"], 200.0)
         self.assertIn("rgba", s["color"])
 
-
-    def test_strong_persistence(self):
-        """Strong（左右15本）がブレイクされない限り100本以上経過してもACTIVEのままであることのテスト"""
+    def test_strong_persistence_and_max_bars(self):
+        """Strong（左右15本）がブレイクされずに放置された場合の最大寿命（strong_max_bars）テスト"""
         # 山の頂点 (200) を作成（左右15本）
         prices = [100 + i * 5 for i in range(15)] + [(200, 190, 195)] + [195 - i * 5 for i in range(15)]
-        # その後、100本間ブレイクせずに100円付近で推移
-        flat_prices = [100] * 100
-        df = self._create_sample_df(prices + flat_prices)
-
+        
+        # 100本経過時点（まだ消えていない）
+        df_100 = self._create_sample_df(prices + [100] * 100)
         cfg = DynamicLevelConfig(
             strong_window=15,
             medium_window=8,
-            weak_window=3
+            weak_window=3,
+            strong_max_bars=300
         )
         engine = DynamicLevelEngine(cfg)
-        active_levels = engine.calculate_levels(df)
+        lvls_100 = engine.calculate_levels(df_100, apply_filter=False)
+        self.assertTrue(any(l.price == 200.0 and l.status == LevelStatus.ACTIVE for l in lvls_100))
 
-        strong_peaks = [lvl for lvl in active_levels if lvl.price == 200.0]
-        self.assertEqual(len(strong_peaks), 1)
-        peak = strong_peaks[0]
-        self.assertEqual(peak.strength, LevelStrength.STRONG)
-        self.assertEqual(peak.status, LevelStatus.ACTIVE)
-        self.assertEqual(peak.opacity, 1.0)
-        self.assertGreaterEqual(peak.bars_alive, 100)
+        # 301本経過時点（strong_max_bars=300 を超えてEXPIREDになる）
+        df_350 = self._create_sample_df(prices + [100] * 350)
+        lvls_350 = engine.calculate_levels(df_350, apply_filter=False)
+        self.assertFalse(any(l.price == 200.0 for l in lvls_350))
+
+        # include_broken=True では EXPIRED として記録されていること
+        all_lvls = engine.calculate_levels(df_350, include_broken=True)
+        expired_strong = next((l for l in all_lvls if l.price == 200.0), None)
+        self.assertIsNotNone(expired_strong)
+        self.assertEqual(expired_strong.status, LevelStatus.EXPIRED)
 
     def test_flat_bar_handling(self):
         """同値（フラットバー）が連続する場合でも山を取りこぼさないことのテスト"""
-        # 山の頂点が2本連続で同値 (200, 200)
         prices = [100, 110, 120, 130, 200, 200, 130, 120, 110, 100]
         df = self._create_sample_df(prices)
 
         cfg = DynamicLevelConfig(weak_window=3)
         engine = DynamicLevelEngine(cfg)
-        levels = engine.calculate_levels(df)
+        levels = engine.calculate_levels(df, apply_filter=False)
 
         res_levels = [lvl for lvl in levels if lvl.type == LevelType.RESISTANCE and lvl.price == 200.0]
         self.assertGreaterEqual(len(res_levels), 1)
+
+    def test_price_distance_filter(self):
+        """現在価格からの距離フィルター（±2.5%）テスト"""
+        # 現在価格 65,000円
+        # ラインA: 66,000円 (距離 1.5% -> 保持)
+        # ラインB: 70,000円 (距離 7.7% -> 除外)
+        # ラインC: 64,000円 (距離 1.5% -> 保持)
+        # ラインD: 60,000円 (距離 7.7% -> 除外)
+        levels = [
+            PriceLevel("r1", LevelType.RESISTANCE, 66000.0, 0, 3, pd.Timestamp.now(), 2, 0.8, LevelStatus.ACTIVE),
+            PriceLevel("r2", LevelType.RESISTANCE, 70000.0, 0, 3, pd.Timestamp.now(), 3, 1.0, LevelStatus.ACTIVE),
+            PriceLevel("s1", LevelType.SUPPORT, 64000.0, 0, 3, pd.Timestamp.now(), 2, 0.8, LevelStatus.ACTIVE),
+            PriceLevel("s2", LevelType.SUPPORT, 60000.0, 0, 3, pd.Timestamp.now(), 3, 1.0, LevelStatus.ACTIVE),
+        ]
+        cfg = DynamicLevelConfig(price_distance_pct=0.025) # ±2.5%
+        engine = DynamicLevelEngine(cfg)
+
+        filtered = engine.filter_for_display(levels, current_price=65000.0)
+        prices = [l.price for l in filtered]
+        self.assertIn(66000.0, prices)
+        self.assertIn(64000.0, prices)
+        self.assertNotIn(70000.0, prices)
+        self.assertNotIn(60000.0, prices)
+
+    def test_max_levels_per_side(self):
+        """最大保持本数（スロット数：上下各4本）制限テスト"""
+        # 現在価格 65,000円に対し、抵抗線が6本、支持線が6本ある場合
+        current_p = 65000.0
+        resistances = [
+            PriceLevel(f"r{i}", LevelType.RESISTANCE, current_p + (i + 1) * 50, 0, 3, pd.Timestamp.now(), 2, 0.8, LevelStatus.ACTIVE)
+            for i in range(6) # 65050, 65100, 65150, 65200, 65250, 65300
+        ]
+        supports = [
+            PriceLevel(f"s{i}", LevelType.SUPPORT, current_p - (i + 1) * 50, 0, 3, pd.Timestamp.now(), 2, 0.8, LevelStatus.ACTIVE)
+            for i in range(6) # 64950, 64900, 64850, 64800, 64750, 64700
+        ]
+        cfg = DynamicLevelConfig(
+            max_levels_per_side=4,
+            merge_threshold_points=10.0 # マージを避けるため小さめに設定
+        )
+        engine = DynamicLevelEngine(cfg)
+
+        filtered = engine.filter_for_display(resistances + supports, current_price=current_p)
+        filtered_res = [l for l in filtered if l.type == LevelType.RESISTANCE]
+        filtered_sup = [l for l in filtered if l.type == LevelType.SUPPORT]
+
+        # 上下それぞれ最大4本に抑えられていること
+        self.assertEqual(len(filtered_res), 4)
+        self.assertEqual(len(filtered_sup), 4)
+        # 現在価格に近い順に選ばれていること
+        self.assertEqual([l.price for l in filtered_res], [65050.0, 65100.0, 65150.0, 65200.0])
+        self.assertEqual([l.price for l in filtered_sup], [64950.0, 64900.0, 64850.0, 64800.0])
+
+    def test_close_levels_merge_100yen(self):
+        """100円未満の近接ラインが二次マージで1本に統合されることのテスト"""
+        current_p = 65000.0
+        # 65,100円 と 65,140円（差額40円 < 100円）の2本の抵抗線
+        levels = [
+            PriceLevel("r1", LevelType.RESISTANCE, 65100.0, 0, 3, pd.Timestamp.now(), 1, 0.5, LevelStatus.ACTIVE, touch_count=1),
+            PriceLevel("r2", LevelType.RESISTANCE, 65140.0, 0, 3, pd.Timestamp.now(), 2, 0.8, LevelStatus.ACTIVE, touch_count=2),
+        ]
+        cfg = DynamicLevelConfig(merge_threshold_points=100.0)
+        engine = DynamicLevelEngine(cfg)
+
+        filtered = engine.filter_for_display(levels, current_price=current_p)
+        self.assertEqual(len(filtered), 1)
+        merged = filtered[0]
+        # 極値（65,140円）に更新されていること
+        self.assertEqual(merged.price, 65140.0)
+        # 反発回数が合算 (1 + 2 = 3回) されていること
+        self.assertEqual(merged.touch_count, 3)
+        # 強度が最大値 (Medium=2) になっていること
+        self.assertEqual(merged.strength, LevelStrength.MEDIUM)
 
     def test_large_dataset_performance(self):
         """3,000本の大規模データに対する高速実行テスト（0.5秒以内）"""
         import time
         np.random.seed(42)
         n = 3000
-        # ランダムウォーク価格データ生成
         returns = np.random.normal(0, 5, n)
         raw_prices = 38000 + np.cumsum(returns)
         highs = raw_prices + np.random.uniform(0, 15, n)
@@ -264,10 +317,8 @@ class TestDynamicLevelEngine(unittest.TestCase):
         elapsed = time.time() - t0
 
         self.assertLess(elapsed, 0.5, f"計算時間が長すぎます: {elapsed:.3f}秒")
-        # 正常にラインが算出されていること
         self.assertGreater(len(levels), 0)
 
 
 if __name__ == "__main__":
     unittest.main()
-

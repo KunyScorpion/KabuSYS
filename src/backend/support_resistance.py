@@ -60,19 +60,24 @@ class DynamicLevelConfig:
     weak_window: int = 3         # Weak: 左右3本
     
     # 寿命・フェードアウトルール（足数）
+    strong_max_bars: int = 500   # Strong: 最大寿命セーフティリミット（500本で消滅、0で無制限）
     fade_medium_start: int = 40  # Medium: 減衰開始足数
     fade_medium_end: int = 60    # Medium: 完全消滅足数
     fade_weak_start: int = 15    # Weak: 減衰開始足数
     fade_weak_end: int = 25      # Weak: 完全消滅足数
     
-    # 近接マージ閾値
-    merge_threshold_points: float = 20.0  # 近接判定の値幅（円、先物呼値ベース）
-    merge_threshold_pct: float = 0.0015   # 近接判定の価格比率（0.15%）
-    use_pct_merge: bool = False           # True: 比率使用, False: 固定値幅使用
+    # 近接マージ閾値（100円未満の近接ラインを統合）
+    merge_threshold_points: float = 100.0  # 近接判定の値幅（デフォルト: 100円）
+    merge_threshold_pct: float = 0.002     # 近接判定の価格比率（0.2%）
+    use_pct_merge: bool = False            # True: 比率使用, False: 固定値幅使用
+    
+    # 描画間引き・フィルター設定
+    price_distance_pct: float = 0.025      # 現在価格からの許容距離（デフォルト: ±2.5%以内のみ表示）
+    max_levels_per_side: int = 4           # 現在価格から近い順に保持する最大本数（上下各4本、計最大8本）
     
     # 描画色設定（RGBAベース HEX）
-    color_resistance: str = "#ff4444"  # 抵抗線ベース色（赤系）
-    color_support: str = "#00e676"     # 支持線ベース色（緑系）
+    color_resistance: str = "#ff1744"  # 抵抗線ベース色（鮮やかなネオンレッド）
+    color_support: str = "#00e676"     # 支持線ベース色（鮮やかなエメラルドグリーン）
 
 
 class DynamicLevelEngine:
@@ -94,7 +99,8 @@ class DynamicLevelEngine:
     def calculate_levels(
         self,
         df: pd.DataFrame,
-        include_broken: bool = False
+        include_broken: bool = False,
+        apply_filter: bool = True
     ) -> List[PriceLevel]:
         """
         OHLCV DataFrameからスイングハイ/ローを検出し、
@@ -166,9 +172,15 @@ class DynamicLevelEngine:
                 lvl.bars_alive += 1
 
                 if lvl.strength == LevelStrength.STRONG:
-                    # Strong: 永続（ブレイクされるまで消えない）
-                    lvl.opacity = 1.0
-                    unexpired_active.append(lvl)
+                    # Strong: 最大寿命セーフティリミット（500本で消滅、0で無制限）
+                    if cfg.strong_max_bars > 0 and lvl.bars_alive >= cfg.strong_max_bars:
+                        lvl.status = LevelStatus.EXPIRED
+                        lvl.opacity = 0.0
+                        lvl.end_at_idx = c
+                        lvl.end_time = cur_time
+                    else:
+                        lvl.opacity = 1.0
+                        unexpired_active.append(lvl)
 
                 elif lvl.strength == LevelStrength.MEDIUM:
                     # Medium: 40本経過後から徐々に薄くなり、60本で完全消滅
@@ -262,13 +274,112 @@ class DynamicLevelEngine:
         # 最終足時点でのACTIVEラインの終了位置を現在足に設定
         latest_idx = n_bars - 1
         latest_time = times[latest_idx]
+        current_price = float(closes[latest_idx])
         for lvl in active_levels:
             lvl.end_at_idx = latest_idx
             lvl.end_time = latest_time
 
         if include_broken:
             return all_levels_history
+
+        if apply_filter:
+            return self.filter_for_display(active_levels, current_price)
         return active_levels
+
+    def filter_for_display(
+        self,
+        levels: List[PriceLevel],
+        current_price: float
+    ) -> List[PriceLevel]:
+        """
+        現在価格からの距離フィルター、近接ラインの二次マージ、
+        および最大保持本数（スロット数）制限を適用して、
+        チャート上に表示すべき最適なライン群を抽出する。
+        """
+        if not levels or current_price <= 0:
+            return levels
+
+        cfg = self.config
+
+        # 1. 現在価格からの距離フィルター（上下 ±price_distance_pct 以内）
+        distance_filtered = []
+        for lvl in levels:
+            diff_ratio = abs(lvl.price - current_price) / current_price
+            if diff_ratio <= cfg.price_distance_pct:
+                distance_filtered.append(lvl)
+
+        if not distance_filtered:
+            return []
+
+        # 2. 近接ラインの統合（価格差が merge_threshold_points 未満の同種ラインをマージ）
+        resistances = [l for l in distance_filtered if l.type == LevelType.RESISTANCE]
+        supports = [l for l in distance_filtered if l.type == LevelType.SUPPORT]
+
+        merged_resistances = self._merge_close_levels(resistances, current_price, is_resistance=True)
+        merged_supports = self._merge_close_levels(supports, current_price, is_resistance=False)
+
+        # 3. 最大保持本数（スロット数）の制限
+        # レジスタンス: 現在価格より上で、現在価格に近い順（価格昇順）
+        above_res = sorted([l for l in merged_resistances if l.price >= current_price], key=lambda x: x.price)
+        final_res = above_res[:cfg.max_levels_per_side]
+
+        # サポート: 現在価格より下で、現在価格に近い順（価格降順）
+        below_sup = sorted([l for l in merged_supports if l.price <= current_price], key=lambda x: x.price, reverse=True)
+        final_sup = below_sup[:cfg.max_levels_per_side]
+
+        return final_res + final_sup
+
+    def _merge_close_levels(
+        self,
+        levels: List[PriceLevel],
+        current_price: float,
+        is_resistance: bool
+    ) -> List[PriceLevel]:
+        """近接するライン同士を1本にマージ（バンド化・統合）"""
+        if len(levels) <= 1:
+            return levels
+
+        cfg = self.config
+        threshold = (current_price * cfg.merge_threshold_pct) if cfg.use_pct_merge else cfg.merge_threshold_points
+
+        # 価格順にソート（レジスタンスなら昇順、サポートなら降順）
+        sorted_lvls = sorted(levels, key=lambda x: x.price, reverse=not is_resistance)
+        merged: List[PriceLevel] = []
+
+        for lvl in sorted_lvls:
+            found_cluster = False
+            for m in merged:
+                if abs(m.price - lvl.price) <= threshold:
+                    # 統合処理: 反発回数加算、強度最大値、寿命更新、極値更新
+                    m.touch_count += lvl.touch_count
+                    m.strength = max(m.strength, lvl.strength)
+                    m.opacity = max(m.opacity, lvl.opacity)
+                    m.bars_alive = min(m.bars_alive, lvl.bars_alive)
+                    m.created_time = min(m.created_time, lvl.created_time)
+                    if is_resistance:
+                        m.price = max(m.price, lvl.price)
+                    else:
+                        m.price = min(m.price, lvl.price)
+                    found_cluster = True
+                    break
+            if not found_cluster:
+                merged.append(PriceLevel(
+                    id=lvl.id,
+                    type=lvl.type,
+                    price=lvl.price,
+                    created_at_idx=lvl.created_at_idx,
+                    confirmed_at_idx=lvl.confirmed_at_idx,
+                    created_time=lvl.created_time,
+                    strength=lvl.strength,
+                    opacity=lvl.opacity,
+                    status=lvl.status,
+                    bars_alive=lvl.bars_alive,
+                    end_at_idx=lvl.end_at_idx,
+                    end_time=lvl.end_time,
+                    touch_count=lvl.touch_count
+                ))
+
+        return merged
 
     def _process_detected_level(
         self,
@@ -381,13 +492,14 @@ class DynamicLevelEngine:
                 dash_style = "Solid"
                 strength_label = "Medium"
             else:
-                line_width = 1.0
+                line_width = 1.2
                 dash_style = "Dash"
                 strength_label = "Weak"
 
-            # 色設定（不透明度を反映）
+            # 色設定（不透明度を反映、ダークテーマでの最低視認性を確保）
+            effective_opacity = max(0.25, lvl.opacity)
             base_rgb = res_rgb if lvl.type == LevelType.RESISTANCE else sup_rgb
-            rgba_str = f"rgba({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]}, {lvl.opacity:.2f})"
+            rgba_str = f"rgba({base_rgb[0]}, {base_rgb[1]}, {base_rgb[2]}, {effective_opacity:.2f})"
             type_label = "抵抗線" if lvl.type == LevelType.RESISTANCE else "支持線"
 
             series_name = f"{type_label} ({strength_label}: ¥{lvl.price:,.0f})"
