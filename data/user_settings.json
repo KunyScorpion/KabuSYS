@@ -122,15 +122,16 @@
       "strong_window": 15,
       "medium_window": 8,
       "weak_window": 3,
-      "merge_threshold": 20.0,
+      "merge_threshold": 100.0,
       "fade_medium_start": 40,
       "fade_medium_end": 60,
       "fade_weak_start": 15,
       "fade_weak_end": 25,
       "price_distance_pct": 2.5,
-      "max_levels_per_side": 4,
-      "strong_max_bars": 500,
-      "max_past_levels": 50
+      "max_levels_per_side": 8,
+      "strong_max_bars": 1000,
+      "max_past_levels": 20,
+      "enable_role_reversal": 1.0
     }
   },
   "backtest_settings": {
