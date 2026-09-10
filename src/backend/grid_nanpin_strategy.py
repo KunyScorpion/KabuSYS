@@ -944,9 +944,9 @@ class GridNanpinBacktester:
             })
 
         # 未決済ポジションの処理:
-        # 期間終了決済は廃止し、表示期間内で決済に至らなかったエントリー・ナンピンは無効（除外）とする
-        if pos is not None and pos.first_entry_time is not None:
-            signal_events = [s for s in signal_events if s['time'] < pos.first_entry_time]
+        # 期間終了時の強制決済は行わず（直近の未完結ポジションを勝敗判定に含めない）、
+        # かつチャート上にはエントリーやナンピンの履歴マーカーを正常に表示するため、
+        # signal_events はそのまま保持する。
 
         equity_df = pd.DataFrame(equity_records)
         return BacktestResult(
