@@ -1,7 +1,7 @@
 {
   "show_volume": false,
   "main_indicators": [
-    "Dynamic_SR"
+    "HI_LOW_Bands"
   ],
   "sub_indicators": [],
   "indicator_params": {
@@ -52,8 +52,8 @@
     },
     "RSI": {
       "period": 9,
-      "upper": 70,
-      "lower": 30
+      "upper": 80,
+      "lower": 20
     },
     "Stochastics": {
       "k_period": 5,
@@ -136,16 +136,16 @@
   },
   "backtest_settings": {
     "strategy_key": "grid_nanpin",
-    "entry_mode": "TREND",
+    "entry_mode": "CONTRARIAN",
     "n_period": 8,
-    "entry_delta": 270.0,
+    "entry_delta": 150.0,
     "grid_step": 300.0,
     "tp_delta": 300.0,
     "sl_amount": 1000000.0,
     "fee": 11.0,
-    "capital": 3000000.0,
-    "margin_per_lot": 45000.0,
-    "lot_table": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7",
+    "capital": 2250000.0,
+    "margin_per_lot": 40000.0,
+    "lot_table": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6,",
     "emergency_breakeven_exit": false
   },
   "lot_table_templates": {
@@ -155,18 +155,6 @@
     "111222": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7"
   },
   "strategy_presets": {
-    "標準設定 (N=20, 利確200円, 73枚)": {
-      "n_period": 20,
-      "entry_delta": 200.0,
-      "grid_step": 250.0,
-      "tp_delta": 200.0,
-      "sl_amount": 500000.0,
-      "fee": 15.0,
-      "capital": 3000000.0,
-      "margin_per_lot": 25000.0,
-      "lot_table": "1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 7, 8, 9, 10",
-      "emergency_breakeven_exit": false
-    },
     "安全重視・同値撤退モード (N=20, 利確200円, 73枚)": {
       "n_period": 20,
       "entry_delta": 200.0,
@@ -189,6 +177,18 @@
       "capital": 3000000.0,
       "margin_per_lot": 45000.0,
       "lot_table": "1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4,  5, 6, 7",
+      "emergency_breakeven_exit": false
+    },
+    "60分 in50 ±250": {
+      "n_period": 8,
+      "entry_delta": 50.0,
+      "grid_step": 250.0,
+      "tp_delta": 250.0,
+      "sl_amount": 1500000.0,
+      "fee": 11.0,
+      "capital": 3000000.0,
+      "margin_per_lot": 45000.0,
+      "lot_table": "1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 5, 6, 7",
       "emergency_breakeven_exit": false
     }
   }
